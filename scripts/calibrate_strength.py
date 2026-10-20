@@ -4,9 +4,9 @@
 
 Each target plays `--games` games (alternating colours) as Nemesis at that Elo
 against Stockfish with UCI_LimitStrength at the same Elo. A well-calibrated target
-scores about 50%. With --fit, the temperature and lapse rate in strength.TABLE are
-scaled after each round (too strong -> hotter, too weak -> cooler) and the fitted
-table is printed for pasting into nemesis/strength.py.
+scores about 50%. With --fit, the target centipawn loss and lapse rate in
+strength.TABLE are scaled after each round (too strong -> more loss, too weak ->
+less) and the fitted table is printed for pasting into nemesis/strength.py.
 
 Stockfish's Elo scale is engine-calibrated, so it maps only roughly onto online
 ratings; the results-based ratings correct for that over time.
@@ -92,8 +92,8 @@ def main() -> None:
             print(f"  target {target:.0f}: Nemesis scored {score:.0%} vs Stockfish UCI_Elo {max(1320, target):.0f}"
                   f"  (~{gap:+.0f} Elo)")
             if rnd < args.fit:
-                # Too strong (gap > 0) -> raise temperature and lapses near this target, and vice versa.
-                factor = min(2.0, max(0.5, 2 ** (gap / 300)))
+                # Too strong (gap > 0) -> more loss and lapses near this target, and vice versa.
+                factor = min(2.5, max(0.4, 2 ** (gap / 300)))
                 lowest = target == min(args.targets)  # rows below the lowest target follow it
                 for row in table:
                     near = abs(row[0] - target) <= 200 or (lowest and row[0] < target)

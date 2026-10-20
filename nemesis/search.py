@@ -183,7 +183,7 @@ class Searcher:
         best = max(lines.values())
         window, lam = window_cp(self.risk, best), blend(self.risk)
         if self.elo:
-            window = max(window, strength.search_window(self.elo))
+            window = max(window, strength.WINDOW)
         depth = 2 if self.deep else 1
         cands: list[Candidate] = []
         for u, cp in lines.items():

@@ -25,9 +25,9 @@ RATED_PGN = """[Event "Rated Rapid game"]
 
 def test_strength_params_monotonic():
     elos = range(strength.MIN_ELO, strength.MAX_ELO + 1, 100)
-    temps = [strength.params(e)[0] for e in elos]
+    acpl = [strength.params(e)[0] for e in elos]
     lapses = [strength.params(e)[1] for e in elos]
-    assert temps == sorted(temps, reverse=True) and lapses == sorted(lapses, reverse=True)
+    assert acpl == sorted(acpl, reverse=True) and lapses == sorted(lapses, reverse=True)
     assert strength.params(strength.MAX_ELO) == (0.0, 0.0)
     assert not strength.limited(strength.MAX_ELO) and strength.limited(1500) and not strength.limited(None)
 
@@ -42,6 +42,8 @@ def test_lower_targets_lose_more_centipawns():
 
     weak, mid, strong = avg_loss(800), avg_loss(1600), avg_loss(2400)
     assert weak > mid > strong == 0
+    # the per-position temperature hits the target loss on average
+    assert abs(avg_loss(1400) - strength.params(1400)[0]) < 25
 
 
 def test_engine_plays_weaker_at_low_target(store, analyzer):
