@@ -13,8 +13,11 @@ import httpx
 
 def main(exe: str) -> None:
     with tempfile.TemporaryDirectory() as tmp:
+        # Output goes to a file, not a pipe: a one-file app is a launcher plus a child
+        # process, and on Windows a leftover child would keep a pipe open forever.
+        log = open(f"{tmp}/app.log", "w")
         proc = subprocess.Popen([exe, "--no-browser", "--db", f"{tmp}/smoke.db"],
-                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+                                stdout=log, stderr=subprocess.STDOUT)
         try:
             url = None
             deadline = time.time() + 120
@@ -35,13 +38,22 @@ def main(exe: str) -> None:
             setup = httpx.get(f"{url}/api/setup", timeout=10).json()
             print(f"OK: {url}, Nemesis played {game['last']}, engine {setup.get('engine')}")
         finally:
-            proc.terminate()
-            try:
-                out, _ = proc.communicate(timeout=10)
-            except subprocess.TimeoutExpired:
-                proc.kill()
-                out, _ = proc.communicate()
-            print(out)
+            stop(proc)
+            log.close()
+            print(open(f"{tmp}/app.log").read())
+
+
+def stop(proc: subprocess.Popen) -> None:
+    """Stop the app and the child process it unpacked itself into."""
+    if sys.platform == "win32":
+        subprocess.run(["taskkill", "/PID", str(proc.pid), "/T", "/F"], capture_output=True)
+    else:
+        proc.terminate()
+    try:
+        proc.wait(timeout=15)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait(timeout=15)
 
 
 if __name__ == "__main__":

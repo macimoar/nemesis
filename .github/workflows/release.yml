@@ -26,6 +26,7 @@ jobs:
           - os: ubuntu-latest
             name: Linux
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
     defaults:
       run:
         shell: bash
@@ -53,6 +54,7 @@ jobs:
         run: pyinstaller --noconfirm packaging/nemesis.spec
 
       - name: Smoke test the built app
+        timeout-minutes: 10
         run: |
           unset STOCKFISH_PATH
           python packaging/smoke_test.py "dist/Nemesis$([ "$RUNNER_OS" = Windows ] && echo .exe)"
