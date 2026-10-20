@@ -106,6 +106,8 @@ Nemesis is meant to be a challenge you can beat, not a wall.
 - **Your rating** starts from the rating recorded in your imported Chess.com/Lichess games. If none of them record one, it starts at 1200. After that, only games against Nemesis move it.
 - **Nemesis's ratings** are tracked separately for each risk tier: Sound, Steering, Trapper and Hustler. Each tier starts at your rating + 50 and then earns its rating from results, so you can see which version of Nemesis actually beats you. Ratings marked `?` are provisional: they have fewer than 10 games behind them.
 - **Calibration.** The strength curve is fitted with `scripts/calibrate_strength.py`, which plays Nemesis at a target Elo against Stockfish's own Elo-limited mode. Stockfish's scale is calibrated for engines and maps only roughly onto online ratings. Your results-based ratings correct for that over time.
+  - **Current fit**, over 16 games per target at depth 10: at a 1400 target, Nemesis scored 62% against Stockfish at 1400, about 90 Elo strong. At a 2000 target, it scored 47% against Stockfish at 2000, about 20 Elo weak.
+  - Stockfish can't play below 1320, so the 800–1100 settings are extrapolated.
 
 ## Game review
 
