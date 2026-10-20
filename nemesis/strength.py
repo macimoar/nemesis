@@ -27,13 +27,16 @@ LOSS_CAP = 500      # losses beyond this count as this much when matching the ta
 WINDOW = 500        # how far below the best move a strength-limited Nemesis looks
 
 # (elo, target average centipawn loss per move, lapse probability per move)
+# 1400-2000 fitted against Stockfish UCI_Elo (scripts/calibrate_strength.py): the
+# loss at which Nemesis scores ~50%. Stockfish can't go below 1320, so the 800 and
+# 1100 rows are extrapolated toward typical beginner play.
 TABLE = [
-    (800, 150.0, 0.06),
-    (1100, 110.0, 0.045),
-    (1400, 80.0, 0.03),
-    (1700, 55.0, 0.018),
-    (2000, 36.0, 0.008),
-    (2200, 22.0, 0.003),
+    (800, 85.0, 0.030),
+    (1100, 60.0, 0.020),
+    (1400, 42.0, 0.012),
+    (1700, 37.0, 0.009),
+    (2000, 31.0, 0.006),
+    (2200, 20.0, 0.003),
     (MAX_ELO, 0.0, 0.0),
 ]
 
