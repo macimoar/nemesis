@@ -50,7 +50,7 @@ def test_exploits_a_grabber(analyzer):
     board = chess.Board("4k3/8/8/8/8/8/3q4/R3K3 b - - 0 1")
     d = Searcher(analyzer, grabber, risk=1.0).choose(board)
     assert d.best.exploit >= d.best.objective
-    assert d.explanation
+    assert d.trap is not None or d.best.replies
 
 
 def test_window_shrinks_when_winning():

@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import chess
 
-from nemesis.analysis.stockfish import Analyzer, StockfishAnalyzer
+from nemesis import commentary
+from nemesis.analysis.stockfish import Analyzer, StockfishAnalyzer, impute_losses
 from nemesis.profile.move_model import load_player_model
 from nemesis.profile.repertoire import OpeningTree
 from nemesis.search import Decision, Searcher
@@ -13,8 +14,10 @@ from nemesis.store import Store
 
 class Nemesis:
     def __init__(self, store: Store, player: str, risk: float = 0.5, depth: int = 10,
-                 deep: bool = False, analyzer: Analyzer | None = None, stockfish_path: str | None = None):
+                 deep: bool = False, analyzer: Analyzer | None = None, stockfish_path: str | None = None,
+                 mode: str = commentary.XRAY):
         self.store = store
+        self.mode = commentary.normalise_mode(mode)
         self.depth = depth
         self.deep = deep
         self.risk = risk
@@ -32,7 +35,15 @@ class Nemesis:
 
     def choose(self, board: chess.Board, human_clock: float | None = None) -> Decision:
         searcher = Searcher(self.analyzer, self.model, self.tree, risk=self.risk, deep=self.deep)
-        return searcher.choose(board, human_clock)
+        decision = searcher.choose(board, human_clock)
+        decision.lines = commentary.before(board, decision, self.mode)
+        return decision
+
+    def react(self, board: chess.Board, decision: Decision, reply: chess.Move) -> list[str]:
+        """Comment on the human's reply. `board` is the position after Nemesis's move."""
+        lines = self.analyzer.lines(board, extra=[reply.uci()])
+        loss = impute_losses(board, lines).get(reply.uci(), 0)
+        return commentary.react(board, decision, reply, loss, self.mode)
 
     def close(self) -> None:
         if self._own_analyzer and hasattr(self.analyzer, "close"):

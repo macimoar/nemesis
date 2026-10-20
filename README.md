@@ -2,9 +2,21 @@
 
 Most chess engines calculate the best move. Nemesis calculates the move that beats **you**.
 
-It studies your games and learns your playstyle: your openings, your appetite for material, how you attack, what you miss, how you play when the clock runs down. Then it plays the move most likely to make *you* go wrong. Every move comes with its reasoning:
+It studies your games and learns your playstyle: your openings, your appetite for material, how you attack, what you miss, how you play when the clock runs down. Then it plays the move most likely to make *you* go wrong. It also talks to you, in one of two commentary modes.
 
-> **a6**: 69% expected against you (44% against perfect play). Trap: I expect Bxa6 (54%) because you grab material when offered; it loses 4.9 pawns.
+**X-Ray** gives the full breakdown. Nemesis never tells you which move it expects from you, so it doesn't bias your thinking. It reacts after you've moved.
+
+> **Nemesis plays d6**
+> - **My move:** d6 (pawn to d6).
+> - **The position:** You're slightly better (about 0.6 pawns ahead for you).
+> - **Why this move:** It's as good as the engine's top choice. Nf6 is 0.25 pawns better, too small to matter, and this one suits how you play.
+> - **My chances:** About 72% against you, compared with 44% if you play perfectly.
+> - **Hint:** I've set something up. Look carefully before you move.
+>
+> *(you play Bxf7+)*
+> - **Gotcha:** That was the trap. I played d6 hoping you'd play bishop takes the pawn on f7 with check, because you grab material when offered and play checks reflexively. It costs you about 4.0 pawns.
+
+**Poker Face** gives nothing away: no numbers, no moves, just in-character one-liners ("Go on, then." … "And there it is.").
 
 ## How it works
 
@@ -59,7 +71,7 @@ pip install -e ".[dev]"
 nemesis import lichess  <username> --max 300     # or: chesscom <username>, or: pgn <username> --file games.pgn
 nemesis train <username>                         # Stockfish-analyses your moves and fits your model
 nemesis profile <username>                       # what Nemesis learned about you
-nemesis play <username> --color black --risk 0.8 # play in the terminal
+nemesis play <username> --color black --risk 0.8 # play in the terminal (--commentary xray|poker)
 nemesis serve                                    # web app at http://127.0.0.1:8000
 nemesis uci                                      # UCI engine for Arena / Cute Chess / En Croissant
 ```
@@ -77,6 +89,7 @@ Once several players are imported, `nemesis train --population` fits the shared 
 | `Depth` | Stockfish depth |
 | `Deep` | Look two of your moves ahead (slower) |
 | `Learn` | Save finished games for retraining |
+| `Commentary` | `X-Ray` or `Poker Face`; sent as `info string` lines |
 | `StockfishPath` | Path to the Stockfish binary |
 
 The database lives at `~/.nemesis/nemesis.db`. Override it with `--db` or `NEMESIS_DB`.

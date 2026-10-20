@@ -55,7 +55,11 @@
   .log { margin-top: 14px; max-height: 300px; overflow: auto; display: flex; flex-direction: column; gap: 8px; }
   .msg { padding: 8px 10px; border-radius: 8px; background: var(--bg); }
   .msg.nemesis { background: var(--accent-soft); }
-  .msg b { margin-right: 6px; }
+  .msg > b { margin-right: 6px; }
+  .msg.reaction { background: transparent; border: 1px dashed var(--accent); }
+  .msg ul { margin: 6px 0 0; padding-left: 18px; }
+  .msg li { margin: 3px 0; }
+  .msg q { font-style: italic; }
   .grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px; }
   .stat { display: flex; justify-content: space-between; gap: 12px; padding: 4px 0; border-bottom: 1px dashed var(--line); }
   .stat span:last-child { font-variant-numeric: tabular-nums; }
@@ -93,6 +97,12 @@
       <input id="risk" type="range" min="0" max="100" value="50">
       <span id="risklabel" class="muted"></span>
     </div>
+    <div class="row">
+      <label>Commentary <select id="commentary">
+        <option value="xray">X-Ray: the full breakdown</option>
+        <option value="poker">Poker Face: says little, gives nothing away</option>
+      </select></label>
+    </div>
     <div style="margin-top:14px"><div id="board" class="board"></div></div>
     <div class="row">
       <button id="resign" class="ghost" disabled>Resign</button>
@@ -128,7 +138,7 @@
 
     <div id="tab-thinking" class="hidden">
       <h2>Last decision</h2>
-      <div id="thinking"><p class="muted">Once Nemesis moves, the candidates it weighed appear here: their score against perfect play and against you.</p></div>
+      <div id="thinking"><p class="muted">Once Nemesis moves, the options it weighed appear here, with its chances for each one if you play perfectly and against you specifically.</p></div>
     </div>
   </section>
 </main>
@@ -211,22 +221,37 @@ function update() {
   const log = $("log"); log.innerHTML = "";
   for (const m of [...game.log].reverse()) {
     const d = document.createElement("div");
-    d.className = "msg " + m.who;
-    d.innerHTML = m.who === "you" ? `<b>You</b>${m.san}` : `<b>Nemesis</b>${escapeHtml(m.text || "")}`;
+    d.className = "msg " + m.who + (m.kind === "reaction" ? " reaction" : "");
+    if (m.who === "you") d.innerHTML = `<b>You</b>${m.san}`;
+    else d.innerHTML = `<b>${m.kind === "move" ? "Nemesis plays " + m.san : "Nemesis"}</b>${speech(m.lines || [])}`;
     log.appendChild(d);
   }
   $("resign").disabled = game.finished;
   $("status").textContent = game.finished ? `Game over: ${game.result}` : (game.turn === game.human ? "Your move." : "Nemesis is thinking…");
-  const lastN = [...game.log].reverse().find(m => m.candidates);
-  if (lastN) showThinking(lastN);
+  $("commentary").value = game.commentary;
+  showThinking();
   if (game.finished) setTimeout(() => loadProfile($("player").value), 4000);
 }
 
-function showThinking(m) {
-  const rows = m.candidates.map(c => `<tr><td>${c.san}</td><td class="n">${pct(c.objective)}</td><td class="n">${pct(c.exploit)}</td><td class="n">${c.score.toFixed(3)}</td></tr>`).join("");
-  $("thinking").innerHTML = `<p>${escapeHtml(m.text)}</p>
-    <table><tr><th>Move</th><th class="n">vs perfect play</th><th class="n">vs you</th><th class="n">score</th></tr>${rows}</table>
-    <p class="muted">"vs you" assumes you reply the way your model predicts. The risk dial sets how much that counts and how unsound a move may be.</p>`;
+// X-Ray lines look like "**Label:** text"; Poker Face lines are plain one-liners.
+function speech(lines) {
+  const fmt = (l) => escapeHtml(l).replace(/^\*\*(.+?)\*\*/, "<b>$1</b>");
+  if (lines.length === 1 && !lines[0].startsWith("**")) return `<q>${escapeHtml(lines[0])}</q>`;
+  return `<ul>${lines.map(l => `<li>${fmt(l)}</li>`).join("")}</ul>`;
+}
+
+function showThinking() {
+  if (game.commentary === "poker") {
+    $("thinking").innerHTML = `<p class="muted">Nemesis isn't telling. Switch commentary to X-Ray to see its reasoning.</p>`;
+    return;
+  }
+  const m = [...game.log].reverse().find(e => e.candidates);
+  if (!m) return;
+  const rows = m.candidates.map(c => `<tr><td>${c.san}</td><td class="n">${pct(c.objective)}</td><td class="n">${pct(c.exploit)}</td></tr>`).join("");
+  $("thinking").innerHTML = `${speech(m.lines)}
+    <h3>Options Nemesis weighed</h3>
+    <table><tr><th>Move</th><th class="n">Its chances if you play perfectly</th><th class="n">Its chances against you</th></tr>${rows}</table>
+    <p class="muted">"Against you" assumes you play the way your profile predicts. The risk dial decides how much that counts, and how far Nemesis may stray from the objectively best move.</p>`;
 }
 
 const pct = (x) => x == null ? "–" : (100 * x).toFixed(0) + "%";
@@ -316,6 +341,11 @@ $("import").onclick = async () => {
 };
 $("player").onchange = () => loadProfile($("player").value);
 $("risk").oninput = riskLabel;
+$("commentary").onchange = async () => {
+  try { localStorage.setItem("nemesis-commentary", $("commentary").value); } catch (e) {}
+  if (game) { game = await api(`/api/games/${game.id}/commentary`, { mode: $("commentary").value }); update(); }
+};
+try { const saved = localStorage.getItem("nemesis-commentary"); if (saved) $("commentary").value = saved; } catch (e) {}
 $("risk").onchange = async () => { if (game && !game.finished) game = await api(`/api/games/${game.id}/risk`, { risk: $("risk").value / 100 }); };
 $("newgame").onclick = async () => {
   const player = $("player").value;
@@ -323,7 +353,7 @@ $("newgame").onclick = async () => {
   flipped = $("color").value === "black";
   selected = null;
   $("status").textContent = "Starting…";
-  try { game = await api("/api/games", { player, color: $("color").value, risk: $("risk").value / 100 }); update(); }
+  try { game = await api("/api/games", { player, color: $("color").value, risk: $("risk").value / 100, commentary: $("commentary").value }); update(); }
   catch (e) { $("status").textContent = e.message; }
 };
 $("resign").onclick = async () => { if (game) { game = await api(`/api/games/${game.id}/resign`, {}); update(); } };

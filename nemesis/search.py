@@ -48,19 +48,24 @@ class Candidate:
     objective: float   # expected score if the human plays perfectly
     exploit: float     # expected score against the modelled human
     score: float
-    replies: list[Reply] = field(default_factory=list)
-    book_note: str | None = None
+    replies: list[Reply] = field(default_factory=list)   # full predicted distribution, most likely first
+    book: tuple[int, float] | None = None                  # (games, player's score) if a known opening node
 
 
 @dataclass
 class Decision:
     move: chess.Move
     candidates: list[Candidate]
-    explanation: str
+    lines: list[str] = field(default_factory=list)   # filled in by the engine's commentary
 
     @property
     def best(self) -> Candidate:
         return self.candidates[0]
+
+    @property
+    def trap(self) -> Reply | None:
+        """The reply Nemesis is hoping for: likely enough, and costly for the human."""
+        return next((r for r in self.best.replies if r.loss >= 100 and r.prob >= 0.08), None)
 
 
 class Searcher:
@@ -164,36 +169,13 @@ class Searcher:
             board.push(move)
             obj = win_prob(cp)
             exploit, replies = self.human_value(board, depth, human_clock)
-            note = None
+            book = None
             if self.tree and (node := self.tree.stats(board)) and node.games >= 3:
-                note = f"you score {node.avg:.0%} from here in {node.games} games"
+                book = (node.games, node.avg)
             board.pop()
             cands.append(Candidate(uci=u, san=san, cp=cp, objective=obj, exploit=exploit,
-                                   score=(1 - lam) * obj + lam * exploit, replies=replies[:5], book_note=note))
+                                   score=(1 - lam) * obj + lam * exploit, replies=replies, book=book))
         # Expected score saturates near 1 in won positions, so the raw eval breaks near-ties.
         cands.sort(key=lambda c: (-round(c.score, 3), -c.cp))
-        decision = Decision(move=chess.Move.from_uci(cands[0].uci), candidates=cands, explanation="")
-        decision.explanation = explain(board, decision)
-        return decision
+        return Decision(move=chess.Move.from_uci(cands[0].uci), candidates=cands)
 
-
-def explain(board: chess.Board, decision: Decision) -> str:
-    c = decision.best
-    after = board.copy()
-    after.push(decision.move)
-    parts = [f"{c.san}: {c.exploit:.0%} expected against you ({c.objective:.0%} against perfect play)."]
-    traps = [r for r in c.replies if r.loss >= 100 and r.prob >= 0.08]
-    if traps:
-        r = traps[0]
-        san = after.san(chess.Move.from_uci(r.uci))
-        why = f" because you {' and '.join(r.reasons)}" if r.reasons else ""
-        parts.append(f"Trap: I expect {san} ({r.prob:.0%}){why}; it loses {r.loss / 100:.1f} pawns.")
-    elif c.replies:
-        r = c.replies[0]
-        parts.append(f"Most likely reply: {after.san(chess.Move.from_uci(r.uci))} ({r.prob:.0%}).")
-    if c.book_note:
-        parts.append(f"Steering: {c.book_note}.")
-    best_obj = max(decision.candidates, key=lambda x: x.objective)
-    if best_obj.uci != c.uci:
-        parts.append(f"(Objectively {best_obj.san} is stronger, by {(best_obj.cp - c.cp) / 100:.2f}.)")
-    return " ".join(parts)

@@ -90,10 +90,12 @@ def cmd_play(args: argparse.Namespace) -> None:
     from nemesis.learn import record_game
 
     store = Store(args.db)
-    nem = Nemesis(store, args.username, risk=args.risk, depth=args.depth, deep=args.deep)
+    nem = Nemesis(store, args.username, risk=args.risk, depth=args.depth, deep=args.deep,
+                  mode=args.commentary)
     human = chess.WHITE if args.color == "white" else chess.BLACK
     board = chess.Board()
     played: list[str] = []
+    decision = None
     try:
         while not board.is_game_over(claim_draw=True):
             print(board.unicode(invert_color=True, borders=True, orientation=human))
@@ -111,10 +113,13 @@ def cmd_play(args: argparse.Namespace) -> None:
                     except ValueError:
                         print("illegal move")
                         continue
+                if decision is not None:
+                    say(nem.react(board, decision, move))
             else:
                 decision = nem.choose(board)
                 move = decision.move
-                print(f"Nemesis: {decision.explanation}")
+                print(f"\nNemesis plays {board.san(move)}")
+                say(decision.lines)
             played.append(move.uci())
             board.push(move)
         result = board.result(claim_draw=True)
@@ -125,6 +130,12 @@ def cmd_play(args: argparse.Namespace) -> None:
         print("game saved; run `nemesis train` to learn from it")
     finally:
         nem.close()
+
+
+def say(lines: list[str]) -> None:
+    for line in lines:
+        print("  - " + line.replace("**", ""))
+    print()
 
 
 def cmd_uci(args: argparse.Namespace) -> None:
@@ -168,6 +179,8 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument("--risk", type=float, default=0.5)
     p.add_argument("--depth", type=int, default=10)
     p.add_argument("--deep", action="store_true")
+    p.add_argument("--commentary", choices=["xray", "poker"], default="xray",
+                   help="xray: full breakdown, no spoilers; poker: in-character one-liners")
     p.set_defaults(func=cmd_play)
 
     p = sub.add_parser("uci", help="speak UCI on stdin/stdout")

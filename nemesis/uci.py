@@ -8,7 +8,9 @@ from typing import TextIO
 
 import chess
 
+from nemesis import commentary
 from nemesis.engine import Nemesis
+from nemesis.search import Decision
 from nemesis.learn import record_game
 from nemesis.store import DEFAULT_DB, Store
 
@@ -19,6 +21,7 @@ OPTIONS = [
     "option name Deep type check default false",
     "option name Learn type check default true",
     "option name StockfishPath type string default <empty>",
+    "option name Commentary type combo default X-Ray var X-Ray var Poker Face",
 ]
 
 
@@ -27,13 +30,14 @@ class UCI:
         self.out = out
         self.db = db or str(DEFAULT_DB)
         self.opts = {"player": "", "risk": "50", "depth": "10", "deep": "false", "learn": "true",
-                     "stockfishpath": ""}
+                     "stockfishpath": "", "commentary": "X-Ray"}
         self.engine: Nemesis | None = None
         self.store: Store | None = None
         self.start_fen = chess.STARTING_FEN
         self.moves: list[str] = []
         self.board = chess.Board()
         self.nemesis_color: chess.Color | None = None
+        self.last: tuple[list[str], Decision] | None = None   # moves after Nemesis's last move, and why
 
     def send(self, line: str) -> None:
         self.out.write(line + "\n")
@@ -45,7 +49,7 @@ class UCI:
             self.engine = Nemesis(
                 self.store, self.opts["player"] or "anonymous", risk=int(self.opts["risk"]) / 100,
                 depth=int(self.opts["depth"]), deep=self.opts["deep"] == "true",
-                stockfish_path=self.opts["stockfishpath"] or None,
+                stockfish_path=self.opts["stockfishpath"] or None, mode=self.opts["commentary"],
             )
         return self.engine
 
@@ -68,6 +72,8 @@ class UCI:
             self.engine.risk = int(value) / 100
         elif name == "deep":
             self.engine.deep = value.lower() == "true"
+        elif name == "commentary":
+            self.engine.mode = commentary.normalise_mode(value)
         elif name in ("depth", "stockfishpath"):
             self.engine.close()
             self.engine = None
@@ -81,6 +87,7 @@ class UCI:
                         result=None if result == "*" else result, start_fen=self.start_fen)
             self.send("info string game recorded; run `nemesis train` to update the model")
         self.moves, self.nemesis_color = [], None
+        self.last = None
 
     def position(self, tokens: list[str]) -> None:
         if tokens[0] == "startpos":
@@ -112,10 +119,18 @@ class UCI:
         args = dict(zip(tokens[::2], tokens[1::2]))
         human_ms = args.get("btime" if self.board.turn == chess.WHITE else "wtime")
         human_clock = int(human_ms) / 1000 if human_ms and human_ms.lstrip("-").isdigit() else None
+        if self.last and self.moves[:-1] == self.last[0] and len(self.moves) == len(self.last[0]) + 1:
+            before = chess.Board(self.start_fen)
+            for u in self.last[0]:
+                before.push_uci(u)
+            for line in engine.react(before, self.last[1], chess.Move.from_uci(self.moves[-1])):
+                self.send(f"info string {line.replace('**', '')}")
         decision = engine.choose(self.board, human_clock)
         best = decision.best
         self.send(f"info depth {engine.depth} score cp {best.cp} pv {best.uci}")
-        self.send(f"info string {decision.explanation}")
+        for line in decision.lines:  # UCI info strings can't contain newlines: one per line
+            self.send(f"info string {line.replace('**', '')}")
+        self.last = (self.moves + [decision.move.uci()], decision)
         self.send(f"bestmove {decision.move.uci()}")
 
     def handle(self, line: str) -> bool:

@@ -15,7 +15,9 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from nemesis.analysis.stockfish import StockfishAnalyzer
+from nemesis import commentary
 from nemesis.engine import Nemesis
+from nemesis.search import Decision
 from nemesis.features import STYLE_TEXT
 from nemesis.learn import record_game, train
 from nemesis.store import DEFAULT_DB, Store
@@ -35,6 +37,7 @@ class NewGameReq(BaseModel):
     color: str = "white"      # the human's colour
     risk: float = 0.5
     deep: bool = False
+    commentary: str = "xray"  # xray | poker
 
 
 class MoveReq(BaseModel):
@@ -43,6 +46,10 @@ class MoveReq(BaseModel):
 
 class RiskReq(BaseModel):
     risk: float
+
+
+class CommentaryReq(BaseModel):
+    mode: str
 
 
 @dataclass
@@ -65,6 +72,7 @@ class Game:
     log: list[dict] = field(default_factory=list)
     finished: bool = False
     result: str | None = None
+    pending: Decision | None = None   # Nemesis's last decision, kept to react to the human's reply
 
 
 def create_app(db: str | Path = DEFAULT_DB, depth: int = 10) -> FastAPI:
@@ -111,7 +119,7 @@ def create_app(db: str | Path = DEFAULT_DB, depth: int = 10) -> FastAPI:
             "turn": "white" if g.board.turn == chess.WHITE else "black",
             "last": g.board.peek().uci() if g.board.move_stack else None,
             "legal": legal, "log": g.log, "finished": g.finished, "result": g.result,
-            "risk": g.engine.risk, "check": g.board.is_check(),
+            "risk": g.engine.risk, "check": g.board.is_check(), "commentary": g.engine.mode,
         }
 
     def finish(g: Game, result: str) -> None:
@@ -119,7 +127,7 @@ def create_app(db: str | Path = DEFAULT_DB, depth: int = 10) -> FastAPI:
         record_game(store, g.player, g.human, [m.uci() for m in g.board.move_stack], result=result)
         job = Job(id=uuid.uuid4().hex[:8], kind="learn", player=g.player)
         jobs[job.id] = job
-        g.log.append({"who": "nemesis", "text": f"Game over ({result}). I'm studying this one."})
+        g.log.append({"who": "nemesis", "kind": "info", "lines": [f"Game over ({result}). I'm studying this one."]})
         run_job(job, train_job)
 
     def nemesis_turn(g: Game) -> None:
@@ -129,12 +137,12 @@ def create_app(db: str | Path = DEFAULT_DB, depth: int = 10) -> FastAPI:
         decision = g.engine.choose(g.board)
         san = g.board.san(decision.move)
         g.board.push(decision.move)
-        best = decision.best
-        g.log.append({"who": "nemesis", "san": san, "text": decision.explanation,
-                      "objective": round(best.objective, 3), "exploit": round(best.exploit, 3),
-                      "candidates": [{"san": c.san, "objective": round(c.objective, 3),
-                                      "exploit": round(c.exploit, 3), "score": round(c.score, 3)}
-                                     for c in decision.candidates[:6]]})
+        g.pending = decision
+        entry = {"who": "nemesis", "kind": "move", "san": san, "lines": decision.lines}
+        if g.engine.mode == commentary.XRAY:  # Poker Face keeps its numbers to itself
+            entry["candidates"] = [{"san": c.san, "objective": round(c.objective, 3),
+                                    "exploit": round(c.exploit, 3)} for c in decision.candidates[:6]]
+        g.log.append(entry)
         if g.board.is_game_over(claim_draw=True):
             finish(g, g.board.result(claim_draw=True))
 
@@ -202,7 +210,8 @@ def create_app(db: str | Path = DEFAULT_DB, depth: int = 10) -> FastAPI:
 
     @app.post("/api/games")
     def new_game(req: NewGameReq) -> dict:
-        engine = Nemesis(store, req.player, risk=req.risk, deep=req.deep, analyzer=analyzer)
+        engine = Nemesis(store, req.player, risk=req.risk, deep=req.deep, analyzer=analyzer,
+                         mode=req.commentary)
         human = chess.WHITE if req.color == "white" else chess.BLACK
         g = Game(id=uuid.uuid4().hex[:10], player=req.player.lower(), human=human, engine=engine)
         games[g.id] = g
@@ -232,6 +241,9 @@ def create_app(db: str | Path = DEFAULT_DB, depth: int = 10) -> FastAPI:
         if move not in g.board.legal_moves:
             raise HTTPException(400, "illegal move")
         g.log.append({"who": "you", "san": g.board.san(move)})
+        if g.pending is not None:
+            g.log.append({"who": "nemesis", "kind": "reaction",
+                          "lines": g.engine.react(g.board, g.pending, move)})
         g.board.push(move)
         nemesis_turn(g)
         return state(g)
@@ -240,6 +252,12 @@ def create_app(db: str | Path = DEFAULT_DB, depth: int = 10) -> FastAPI:
     def set_risk(game_id: str, req: RiskReq) -> dict:
         g = get_game(game_id)
         g.engine.risk = max(0.0, min(1.0, req.risk))
+        return state(g)
+
+    @app.post("/api/games/{game_id}/commentary")
+    def set_commentary(game_id: str, req: CommentaryReq) -> dict:
+        g = get_game(game_id)
+        g.engine.mode = commentary.normalise_mode(req.mode)
         return state(g)
 
     @app.post("/api/games/{game_id}/resign")
