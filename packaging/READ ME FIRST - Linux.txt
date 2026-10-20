@@ -1,0 +1,8 @@
+NEMESIS - the chess opponent that learns how you play
+
+1. Run ./Nemesis (from a terminal, or double-click it if your file manager allows).
+   If it won't run, make it executable first: chmod +x Nemesis
+2. Nemesis opens in your web browser. Keep the terminal open while you play; press Ctrl+C to quit.
+3. Type your Chess.com or Lichess username, and Nemesis studies your games.
+
+Your games and everything Nemesis learns stay on this computer (in ~/.nemesis).

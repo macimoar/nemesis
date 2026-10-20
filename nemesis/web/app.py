@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import threading
+import time
 import traceback
 import uuid
 from contextlib import asynccontextmanager
@@ -10,10 +11,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import chess
+import httpx
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
+from nemesis.analysis.install import ensure_stockfish
 from nemesis.analysis.stockfish import StockfishAnalyzer
 from nemesis import commentary, ratings
 from nemesis.engine import Nemesis
@@ -24,6 +27,25 @@ from nemesis.review import cached_review, rating_changes, review_game
 from nemesis.store import DEFAULT_DB, Store
 
 STATIC = Path(__file__).parent / "static"
+
+
+def _time_left(started: float, done: int, total: int) -> str:
+    """' about 3 minutes left', from the pace so far."""
+    if done < 3:
+        return ""
+    left = (time.monotonic() - started) / done * (total - done)
+    if left < 60:
+        return " less than a minute left"
+    minutes = round(left / 60)
+    return f" about {minutes} minute{'s' if minutes != 1 else ''} left"
+
+
+def _quietly(fn) -> None:
+    """Run a warm-up step; its failure is reported through /api/setup instead."""
+    try:
+        fn()
+    except Exception:
+        pass
 
 
 class ImportReq(BaseModel):
@@ -85,12 +107,31 @@ class Game:
 
 def create_app(db: str | Path = DEFAULT_DB, depth: int = 10) -> FastAPI:
     store = Store(db)
-    analyzer = StockfishAnalyzer(store, depth=depth)
+    # Stockfish starts lazily: on a fresh computer it may need downloading first.
+    setup = {"stockfish": "checking", "message": "", "progress": 0.0}
+    holder: dict[str, StockfishAnalyzer] = {}
+    ready = threading.Lock()
+
+    def get_analyzer() -> StockfishAnalyzer:
+        with ready:
+            if "a" not in holder:
+                def progress(msg: str, frac: float) -> None:
+                    setup.update(stockfish="downloading", message=msg, progress=frac)
+                try:
+                    path = ensure_stockfish(progress)
+                    holder["a"] = StockfishAnalyzer(store, path=path, depth=depth)
+                except Exception as exc:
+                    setup.update(stockfish="error", message=str(exc))
+                    raise
+                setup.update(stockfish="ready", message="", progress=1.0, engine=path)
+            return holder["a"]
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
+        threading.Thread(target=lambda: _quietly(get_analyzer), daemon=True).start()
         yield
-        analyzer.close()
+        if "a" in holder:
+            holder["a"].close()
 
     app = FastAPI(title="Nemesis", lifespan=lifespan)
     jobs: dict[str, Job] = {}
@@ -107,11 +148,17 @@ def create_app(db: str | Path = DEFAULT_DB, depth: int = 10) -> FastAPI:
         threading.Thread(target=target, daemon=True).start()
 
     def train_job(job: Job) -> None:
+        started = time.monotonic()
+
         def progress(done: int, total: int) -> None:
             job.progress = 0.1 + 0.9 * done / max(total, 1)
-            job.message = f"analysing game {done}/{total}"
+            job.message = f"Studying game {done} of {total}…{_time_left(started, done, total)}"
+        if setup["stockfish"] != "ready":
+            job.message = "Getting Stockfish ready (first launch only)…"
+        analyzer = get_analyzer()
+        started = time.monotonic()
         _, metrics = train(store, job.player, analyzer, progress=progress)
-        job.message = f"trained on {metrics['samples']} moves from {metrics['games']} games"
+        job.message = f"Done: studied {metrics['samples']} of your moves from {metrics['games']} games."
         for g in games.values():
             if g.player == job.player:
                 g.engine.reload()
@@ -171,6 +218,14 @@ def create_app(db: str | Path = DEFAULT_DB, depth: int = 10) -> FastAPI:
     def index() -> FileResponse:
         return FileResponse(STATIC / "index.html")
 
+    @app.get("/api/health")
+    def health() -> dict:
+        return {"app": "nemesis"}
+
+    @app.get("/api/setup")
+    def setup_state() -> dict:
+        return setup | {"players": len(store.players())}
+
     @app.get("/api/players")
     def players() -> list[dict]:
         return [{k: v for k, v in p.items() if k != "metrics"} for p in store.players()]
@@ -184,21 +239,32 @@ def create_app(db: str | Path = DEFAULT_DB, depth: int = 10) -> FastAPI:
         jobs[job.id] = job
 
         def work(job: Job) -> None:
-            job.message = "downloading games"
-            if req.source == "lichess":
-                from nemesis.ingest.lichess import import_user
-                n = import_user(store, player, req.max_games)
-            elif req.source == "chesscom":
-                from nemesis.ingest.chesscom import import_user
-                n = import_user(store, player, req.max_games)
-            elif req.source == "pgn" and req.pgn:
-                from nemesis.ingest.pgn import import_pgn_text
-                n = import_pgn_text(store, req.pgn, player)
-            else:
-                raise ValueError("unknown source or empty PGN")
+            site = {"lichess": "Lichess", "chesscom": "Chess.com"}.get(req.source, "the PGN")
+            job.message = f"Downloading your games from {site}…"
+            try:
+                if req.source == "lichess":
+                    from nemesis.ingest.lichess import import_user
+                    n = import_user(store, player, req.max_games)
+                elif req.source == "chesscom":
+                    from nemesis.ingest.chesscom import import_user
+                    n = import_user(store, player, req.max_games)
+                elif req.source == "pgn" and req.pgn:
+                    from nemesis.ingest.pgn import import_pgn_text
+                    n = import_pgn_text(store, req.pgn, player)
+                else:
+                    raise ValueError("Paste some PGN text first.")
+            except httpx.HTTPStatusError as exc:  # explain in plain words, not HTTP jargon
+                if exc.response.status_code == 404:
+                    raise ValueError(f"We couldn't find a {site} player called “{player}”. "
+                                     "Check the spelling.") from None
+                if exc.response.status_code == 429:
+                    raise ValueError(f"{site} asked us to slow down. Wait a minute and try again.") from None
+                raise ValueError(f"{site} had a problem ({exc.response.status_code}). Try again later.") from None
+            except httpx.TransportError:
+                raise ValueError(f"Couldn't reach {site}. Are you connected to the internet?") from None
             if not store.games(player):
-                raise ValueError(f"no games found for {player}")
-            job.message, job.progress = f"imported {n} new games", 0.1
+                raise ValueError(f"{site} has no standard chess games for “{player}” yet.")
+            job.message, job.progress = f"Got {n} new games. Getting ready to study them…", 0.1
             train_job(job)
 
         run_job(job, work)
@@ -231,7 +297,7 @@ def create_app(db: str | Path = DEFAULT_DB, depth: int = 10) -> FastAPI:
 
     @app.post("/api/games")
     def new_game(req: NewGameReq) -> dict:
-        engine = Nemesis(store, req.player, risk=req.risk, deep=req.deep, analyzer=analyzer,
+        engine = Nemesis(store, req.player, risk=req.risk, deep=req.deep, analyzer=get_analyzer(),
                          mode=req.commentary, elo=req.elo or None)
         human = chess.WHITE if req.color == "white" else chess.BLACK
         g = Game(id=uuid.uuid4().hex[:10], player=req.player.lower(), human=human, engine=engine)
@@ -308,7 +374,7 @@ def create_app(db: str | Path = DEFAULT_DB, depth: int = 10) -> FastAPI:
                 "opponent": "Nemesis" if gr.source == "nemesis" else gr.opponent,
                 "color": "white" if gr.color else "black", "result": gr.result,
                 "rating_change": round(change[1] - change[0]) if change else None,
-                "reviewed": cached_review(store, gr.id, analyzer.depth) is not None,
+                "reviewed": cached_review(store, gr.id, depth) is not None,
             })
         return out
 
@@ -324,8 +390,8 @@ def create_app(db: str | Path = DEFAULT_DB, depth: int = 10) -> FastAPI:
             def progress(done: int, total: int) -> None:
                 job.progress = done / max(total, 1)
                 job.message = f"analysing move {done}/{total}"
-            if cached_review(store, game_id, analyzer.depth) is None:
-                review_game(store, analyzer, game_id, progress=progress)
+            if cached_review(store, game_id, depth) is None:
+                review_game(store, get_analyzer(), game_id, progress=progress)
             job.message = "review ready"
 
         run_job(job, work)
@@ -333,7 +399,7 @@ def create_app(db: str | Path = DEFAULT_DB, depth: int = 10) -> FastAPI:
 
     @app.get("/api/review/{game_id:path}")
     def get_review(game_id: str) -> dict:
-        rev = cached_review(store, game_id, analyzer.depth)
+        rev = cached_review(store, game_id, depth)
         if rev is None:
             return {"ready": False}
         rev["ratings"] = rating_changes(store, game_id)

@@ -11,6 +11,7 @@ import glob
 import math
 import os
 import shutil
+import sys
 import threading
 from typing import Iterable, Protocol
 
@@ -43,11 +44,23 @@ def normalise_path(raw: str) -> str | None:
     return None
 
 
+def bundled_stockfish() -> str | None:
+    """The copy shipped inside the packaged app (PyInstaller unpacks it to sys._MEIPASS)."""
+    base = getattr(sys, "_MEIPASS", None)
+    path = _engine_in(os.path.join(base, "stockfish")) if base else None
+    if path and not os.access(path, os.X_OK):  # unpacked without the executable bit
+        os.chmod(path, os.stat(path).st_mode | 0o111)
+    return path
+
+
 def find_stockfish() -> str | None:
+    """Look in order: STOCKFISH_PATH, the app bundle, PATH and usual places, Nemesis's own download."""
     env = os.environ.get("STOCKFISH_PATH")
     if env:
         # A bad STOCKFISH_PATH is reported by stockfish_path_problem(), not silently replaced.
         return normalise_path(env)
+    if path := bundled_stockfish():
+        return path
     for cand in ("stockfish", "stockfish.exe"):
         if path := shutil.which(cand):
             return path
@@ -59,7 +72,8 @@ def find_stockfish() -> str | None:
     for cand in ("/usr/games/stockfish", "/usr/local/bin/stockfish", "/opt/homebrew/bin/stockfish"):
         if os.path.isfile(cand):
             return cand
-    return None
+    from nemesis.analysis.install import downloaded
+    return downloaded()
 
 
 def stockfish_path_problem() -> str:
@@ -67,7 +81,8 @@ def stockfish_path_problem() -> str:
     if env:
         return (f"STOCKFISH_PATH={env!r} is not a Stockfish executable. "
                 "Set it to the .exe file itself, without quotes.")
-    return "Stockfish not found: install it, or set STOCKFISH_PATH to the Stockfish executable"
+    return ("Stockfish not found. Run `nemesis install-stockfish` to download it, "
+            "or set STOCKFISH_PATH to the Stockfish executable")
 
 
 def win_prob(cp: float) -> float:

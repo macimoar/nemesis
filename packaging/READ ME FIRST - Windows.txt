@@ -1,0 +1,10 @@
+NEMESIS - the chess opponent that learns how you play
+
+1. Double-click Nemesis.exe.
+2. The first time, Windows may show "Windows protected your PC".
+   That's because this free app isn't code-signed. Click "More info", then "Run anyway".
+3. A small black window opens, and Nemesis opens in your web browser.
+   Keep the black window open while you play. Close it to quit.
+4. Type your Chess.com or Lichess username, and Nemesis studies your games.
+
+Your games and everything Nemesis learns stay on this computer (in your user folder, under .nemesis).

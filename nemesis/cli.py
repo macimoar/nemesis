@@ -212,15 +212,24 @@ def cmd_uci(args: argparse.Namespace) -> None:
 
 
 def cmd_serve(args: argparse.Namespace) -> None:
-    import uvicorn
-    from nemesis.web.app import create_app
-    uvicorn.run(create_app(args.db), host=args.host, port=args.port)
+    from nemesis.launcher import serve
+    serve(args.db, host=args.host, port=args.port, open_browser=args.open)
+
+
+def cmd_install_stockfish(args: argparse.Namespace) -> None:
+    from nemesis.analysis.install import ensure_stockfish
+
+    def show(msg: str, frac: float) -> None:
+        print(f"\r{msg}: {frac:4.0%}", end="", flush=True)
+
+    path = ensure_stockfish(progress=show)
+    print(f"\nStockfish ready: {path}")
 
 
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(prog="nemesis", description="The chess engine that learns to beat you.")
     parser.add_argument("--db", default=str(DEFAULT_DB), help="SQLite database path")
-    sub = parser.add_subparsers(dest="cmd", required=True)
+    sub = parser.add_subparsers(dest="cmd")
 
     p = sub.add_parser("import", help="import a player's games")
     p.add_argument("source", choices=["lichess", "chesscom", "pgn"])
@@ -273,10 +282,18 @@ def main(argv: list[str] | None = None) -> None:
 
     p = sub.add_parser("serve", help="run the web app")
     p.add_argument("--host", default="127.0.0.1")
-    p.add_argument("--port", type=int, default=8000)
+    p.add_argument("--port", type=int, help="default: 8000, or the next free port")
+    p.add_argument("--open", action="store_true", help="open the browser too")
     p.set_defaults(func=cmd_serve)
 
+    p = sub.add_parser("install-stockfish", help="download Stockfish for this computer")
+    p.set_defaults(func=cmd_install_stockfish)
+
     args = parser.parse_args(argv)
+    if args.cmd is None:  # plain `nemesis`: start the app and open the browser
+        from nemesis.launcher import serve
+        serve(args.db)
+        return
     if args.cmd == "train" and not args.population and not args.username:
         parser.error("train needs a username (or --population)")
     args.func(args)

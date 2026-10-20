@@ -18,6 +18,21 @@ It studies your games and learns your playstyle: your openings, your appetite fo
 
 **Poker Face** gives nothing away: no numbers, no moves, just in-character one-liners ("Go on, then." … "And there it is.").
 
+## Quick start (no coding needed)
+
+1. Go to the [**Releases**](../../releases) page and download the zip for your computer:
+   - **Windows:** `Nemesis-Windows.zip`
+   - **Mac** (M1/M2/M3 or later): `Nemesis-Mac-AppleSilicon.zip`
+   - **Older Intel Mac:** `Nemesis-Mac-Intel.zip`
+   - **Linux:** `Nemesis-Linux.zip`
+2. Unzip it, then open **Nemesis**:
+   - **Windows:** double-click `Nemesis.exe`. If you see "Windows protected your PC", click **More info → Run anyway**. This warning appears because the app isn't code-signed.
+   - **Mac:** right-click `Nemesis`, choose **Open**, then **Open** again. You only need to do this the first time.
+3. Your browser opens to Nemesis. Type your Chess.com or Lichess username, and it studies your games. This takes a few minutes the first time.
+4. Play. Keep the small Nemesis window open while you play, and close it when you're done.
+
+Everything stays on your computer, in a `.nemesis` folder in your home folder. Stockfish is included, so there's nothing else to install.
+
 ## How it works
 
 1. **Opponent model.** A per-player conditional-logit model predicts P(move | position, you). Each legal move is described by about 30 features:
@@ -40,30 +55,20 @@ It studies your games and learns your playstyle: your openings, your appetite fo
 
 5. **It keeps learning.** Every game you play against it, in the web app, the terminal or a UCI GUI, is saved. Retraining weights recent games, and games against Nemesis, more heavily.
 
-## Install
+## Running from source (for developers)
+
+You need Python 3.10 or newer. Stockfish is downloaded for you on first run.
 
 ```bash
-python -m venv .venv && . .venv/bin/activate
-pip install -e '.[dev]'
-# plus Stockfish: apt install stockfish / brew install stockfish (or set STOCKFISH_PATH)
-```
-
-### Windows
-
-```powershell
-py -m venv .venv
-.venv\Scripts\activate
-python -m pip install --upgrade pip setuptools wheel
+python -m venv .venv
+. .venv/bin/activate          # Windows: .venv\Scripts\activate
 pip install -e ".[dev]"
+nemesis                       # starts the app and opens your browser
 ```
 
-1. Download Stockfish from https://stockfishchess.org/download/. If you're not sure your CPU supports AVX2, take the AVX2 build. If Stockfish crashes on startup, switch to the "compatible" build.
-2. Point Nemesis at the `.exe`. Nemesis also accepts the unzipped folder and strips quotes, but the plain path is safest:
-   ```powershell
-   setx STOCKFISH_PATH C:\tools\stockfish\stockfish-windows-x86-64-avx2.exe
-   ```
-   `setx` only affects **new** terminals, so open a new one and re-activate the venv.
-3. Run `pytest -q`. All tests should pass. If Stockfish can't be found, the engine test is skipped and says why.
+- **Stockfish:** if it isn't already installed, Nemesis downloads the right official build for your computer into `~/.nemesis/stockfish/` on first launch. It falls back to a compatible build if your CPU can't run the fast one. Run `nemesis install-stockfish` to do this up front. To use your own copy instead, set `STOCKFISH_PATH` to the executable.
+- **Tests:** `pytest -q`.
+- **Building the app:** `python -m nemesis.analysis.install --dest packaging/stockfish`, then `pyinstaller packaging/nemesis.spec`. The `Build app` GitHub workflow does this for Windows, macOS and Linux.
 
 ## Use
 
@@ -75,7 +80,8 @@ nemesis play <username> --color black --risk 0.8 # play in the terminal (--comme
 nemesis games <username>                         # list your games
 nemesis review <username> [--game ID]            # review a game (default: the latest)
 nemesis ratings <username>                       # your rating and Nemesis's, per risk tier
-nemesis serve                                    # web app at http://127.0.0.1:8000
+nemesis                                          # the app: starts the server and opens your browser
+nemesis serve                                    # just the server (8000, or the next free port)
 nemesis uci                                      # UCI engine for Arena / Cute Chess / En Croissant
 ```
 
@@ -140,7 +146,7 @@ The model learns the grabber's habit: its capture weight comes out at +3.9 above
 ```
 nemesis/
   ingest/       lichess.py, chesscom.py, pgn.py
-  analysis/     stockfish.py (MultiPV analysis + persistent eval cache)
+  analysis/     stockfish.py (MultiPV analysis + eval cache), install.py (automatic Stockfish download)
   features.py   per-move feature vectors
   profile/      move_model.py (the opponent model), style.py (profile), repertoire.py (opening tree)
   search.py     exploit search + risk dial
@@ -149,9 +155,11 @@ nemesis/
   ratings.py    Elo for you and for each Nemesis risk tier
   review.py     game review: accuracy, labels, key moments, Nemesis's side
   engine.py     Nemesis = model + opening tree + search
+  launcher.py   double-click entry: free port, reuse a running copy, open the browser
   learn.py      training pipeline; recording games played against Nemesis
   uci.py, cli.py, web/
 scripts/        simulate.py, benchmark.py, calibrate_strength.py
+packaging/      PyInstaller spec, smoke test, per-OS "READ ME FIRST" notes
 tests/
 ```
 

@@ -1,0 +1,13 @@
+NEMESIS - the chess opponent that learns how you play
+
+1. Right-click (or Control-click) "Nemesis" and choose "Open", then click "Open" again.
+   (A normal double-click is blocked the first time because this free app isn't signed by Apple.
+   After the first time, double-clicking works.)
+2. A Terminal window opens, and Nemesis opens in your web browser.
+   Keep the Terminal window open while you play. Close it to quit.
+3. Type your Chess.com or Lichess username, and Nemesis studies your games.
+
+If macOS still refuses: open System Settings > Privacy & Security, scroll down,
+and click "Open Anyway" next to Nemesis.
+
+Your games and everything Nemesis learns stay on this computer (in your home folder, under .nemesis).

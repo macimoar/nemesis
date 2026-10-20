@@ -107,6 +107,18 @@
   .acc big { display: block; font-size: 30px; font-weight: 600; font-variant-numeric: tabular-nums; }
   .moment { display: block; width: 100%; text-align: left; background: var(--bg); color: var(--ink); border: 1px solid var(--line); margin: 6px 0; }
   .gamerow td:last-child { text-align: right; }
+  .welcome { max-width: 560px; width: calc(100% - 32px); margin: 24px auto; padding: 28px 24px; }
+  .welcome h2 { font-size: 24px; text-transform: none; letter-spacing: 0; color: var(--ink); margin-bottom: 6px; }
+  .welcome .lead { color: var(--muted); margin: 0 0 20px; }
+  .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+  .seg button { background: transparent; color: var(--ink); border-radius: 0; padding: 9px 16px; }
+  .seg button.on { background: var(--accent); color: #fff; }
+  .welcome input[type=text] { width: 100%; font-size: 17px; padding: 11px 12px; margin-top: 12px; }
+  .welcome .big { width: 100%; font-size: 17px; padding: 13px; margin-top: 14px; }
+  .welcome details { margin-top: 12px; color: var(--muted); font-size: 14px; }
+  .welcome .linkish { background: none; color: var(--muted); padding: 6px 0; text-decoration: underline; }
+  .welcome .err { color: var(--accent); margin-top: 10px; min-height: 1.4em; }
+  .welcome .stage { margin-top: 14px; font-size: 15px; min-height: 1.4em; }
   .progress i { display: block; height: 100%; background: var(--accent); width: 0; transition: width .3s; }
 </style>
 </head>
@@ -115,6 +127,36 @@
   <h1><span>Nemesis</span></h1>
   <p>Not the best move. The move that beats <em>you</em>.</p>
 </header>
+<section id="welcome" class="panel welcome hidden" aria-live="polite">
+  <h2>Welcome to Nemesis</h2>
+  <p class="lead">The chess opponent that learns how <em>you</em> play, then plays to beat you.</p>
+  <div id="wl-form">
+    <div class="seg" role="group" aria-label="Where you play">
+      <button data-src="chesscom" class="on">Chess.com</button>
+      <button data-src="lichess">Lichess</button>
+    </div>
+    <label for="wl-user" class="hidden">Your username</label>
+    <input id="wl-user" type="text" placeholder="Your Chess.com username" autocomplete="off" autocapitalize="off" spellcheck="false">
+    <details><summary>More options</summary>
+      <label>How many recent games to learn from
+        <input id="wl-max" type="number" value="200" min="20" max="2000" style="width:90px"></label>
+      <p>More games means a better model, but takes longer the first time.</p>
+    </details>
+    <button id="wl-go" class="big">Teach Nemesis how I play</button>
+    <div id="wl-err" class="err" role="alert"></div>
+    <button id="wl-skip" class="linkish">Skip for now, just let me play</button>
+    <p class="muted" style="font-size:13px">Your games and everything Nemesis learns stay on this computer.</p>
+  </div>
+  <div id="wl-work" class="hidden">
+    <div class="progress" style="height:8px"><i id="wl-bar"></i></div>
+    <div id="wl-stage" class="stage">Starting…</div>
+    <p class="muted" style="font-size:13px">The first time takes a few minutes: Nemesis replays every game and studies each of your moves.</p>
+  </div>
+  <div id="wl-done" class="hidden">
+    <p id="wl-summary" class="stage"></p>
+    <button id="wl-play" class="big">Play your first game</button>
+  </div>
+</section>
 <main>
   <section class="panel">
     <div class="row" style="margin-top:0">
@@ -341,7 +383,58 @@ async function loadPlayers(select) {
   sel.innerHTML = ps.map(p => `<option value="${p.player}">${p.player} (${p.games})</option>`).join("") || `<option value="">no players yet</option>`;
   if (cur && ps.some(p => p.player === cur)) sel.value = cur;
   if (sel.value) { loadProfile(sel.value); loadRatings(sel.value); }
+  if (!ps.length && !welcomeSkipped) showWelcome();
 }
+
+// ---------------------------------------------------------------------------
+// First-run welcome
+// ---------------------------------------------------------------------------
+let welcomeSource = "chesscom", welcomeSkipped = false;
+function showWelcome(on = true) {
+  $("welcome").classList.toggle("hidden", !on);
+  document.querySelector("main").classList.toggle("hidden", on);
+  if (on) setTimeout(() => $("wl-user").focus(), 50);
+}
+document.querySelectorAll("#welcome .seg button").forEach(b => b.onclick = () => {
+  welcomeSource = b.dataset.src;
+  document.querySelectorAll("#welcome .seg button").forEach(x => x.classList.toggle("on", x === b));
+  $("wl-user").placeholder = `Your ${b.textContent} username`;
+});
+$("wl-user").addEventListener("keydown", (e) => { if (e.key === "Enter") $("wl-go").click(); });
+$("wl-go").onclick = async () => {
+  const username = $("wl-user").value.trim();
+  if (!username) { $("wl-err").textContent = "Type your username first."; return; }
+  $("wl-err").textContent = "";
+  $("wl-form").classList.add("hidden"); $("wl-work").classList.remove("hidden");
+  let job;
+  try { ({ job } = await api("/api/import", { source: welcomeSource, username, max_games: +$("wl-max").value })); }
+  catch (e) { return welcomeError(e.message); }
+  const tick = async () => {
+    const [j, st] = await Promise.all([api(`/api/jobs/${job}`), api("/api/setup")]);
+    $("wl-bar").style.width = (100 * j.progress) + "%";
+    $("wl-stage").textContent = st.stockfish === "downloading" && j.progress < .11
+      ? `${st.message}… ${Math.round(100 * st.progress)}% (first launch only)` : j.message;
+    if (j.status === "running") return setTimeout(tick, 800);
+    if (j.status === "error") return welcomeError(j.message);
+    $("wl-work").classList.add("hidden"); $("wl-done").classList.remove("hidden");
+    $("wl-summary").textContent = `${j.message} Nemesis now knows how you play.`;
+    await loadPlayers(j.player);
+  };
+  tick();
+};
+function welcomeError(msg) {
+  $("wl-work").classList.add("hidden"); $("wl-form").classList.remove("hidden");
+  $("wl-err").textContent = msg;
+}
+$("wl-play").onclick = () => { showWelcome(false); $("newgame").click(); };
+$("wl-skip").onclick = () => {
+  welcomeSkipped = true; showWelcome(false);
+  const sel = $("player");
+  if (![...sel.options].some(o => o.value === "guest")) sel.innerHTML = `<option value="guest">guest</option>`;
+  sel.value = "guest";
+  $("profile").innerHTML = `<p class="muted">Playing as a guest: Nemesis starts with a generic model of a club player.
+    Import your games anytime from the Import tab so it can learn how you play.</p>`;
+};
 
 async function loadProfile(player) {
   if (!player) return;
