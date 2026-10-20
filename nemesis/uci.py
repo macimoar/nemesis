@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sys
+import traceback
 from typing import TextIO
 
 import chess
@@ -96,6 +97,16 @@ class UCI:
             self.board.push_uci(u)
 
     def go(self, tokens: list[str]) -> None:
+        try:
+            self.search(tokens)
+        except Exception as exc:
+            # Never die mid-game: tell the GUI why and still answer with a legal move.
+            traceback.print_exc(file=sys.stderr)
+            self.send(f"info string error: {exc}")
+            fallback = next(iter(self.board.legal_moves), None)
+            self.send(f"bestmove {fallback.uci() if fallback else '0000'}")
+
+    def search(self, tokens: list[str]) -> None:
         engine = self.ensure_engine()
         self.nemesis_color = self.board.turn
         args = dict(zip(tokens[::2], tokens[1::2]))
@@ -139,6 +150,8 @@ class UCI:
 
 
 def main(db: str | None = None) -> None:
+    if hasattr(sys.stdout, "reconfigure"):  # Windows pipes default to a legacy code page
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     uci = UCI(db=db)
     for line in sys.stdin:
         if not uci.handle(line):

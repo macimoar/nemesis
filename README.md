@@ -36,6 +36,23 @@ pip install -e '.[dev]'
 # plus Stockfish: apt install stockfish / brew install stockfish (or set STOCKFISH_PATH)
 ```
 
+### Windows
+
+```powershell
+py -m venv .venv
+.venv\Scripts\activate
+python -m pip install --upgrade pip setuptools wheel
+pip install -e ".[dev]"
+```
+
+1. Download Stockfish from https://stockfishchess.org/download/. If you're not sure your CPU supports AVX2, take the AVX2 build. If Stockfish crashes on startup, switch to the "compatible" build.
+2. Point Nemesis at the `.exe`. Nemesis also accepts the unzipped folder and strips quotes, but the plain path is safest:
+   ```powershell
+   setx STOCKFISH_PATH C:\tools\stockfish\stockfish-windows-x86-64-avx2.exe
+   ```
+   `setx` only affects **new** terminals, so open a new one and re-activate the venv.
+3. Run `pytest -q`. All tests should pass. If Stockfish can't be found, the engine test is skipped and says why.
+
 ## Use
 
 ```bash

@@ -7,6 +7,7 @@ Moves outside that set are unknown; callers impute them (see `impute_losses`).
 
 from __future__ import annotations
 
+import glob
 import math
 import os
 import shutil
@@ -21,15 +22,52 @@ from nemesis.store import Store
 MATE_CP = 2000  # mates are clamped to this many centipawns
 
 
+def _engine_in(directory: str) -> str | None:
+    """A Stockfish binary inside `directory` (Windows downloads unzip to a folder of that name)."""
+    for pattern in ("stockfish*.exe", "stockfish*", "*/stockfish*.exe", "*/stockfish*"):
+        for cand in sorted(glob.glob(os.path.join(directory, pattern))):
+            if os.path.isfile(cand) and not cand.lower().endswith((".txt", ".md", ".zip", ".tar")):
+                return cand
+    return None
+
+
+def normalise_path(raw: str) -> str | None:
+    """Clean up a user-supplied Stockfish path: strip quotes, accept a folder. None if no file is there."""
+    path = os.path.expanduser(raw.strip().strip('"').strip("'").strip())
+    if os.path.isdir(path):
+        return _engine_in(path)
+    if os.path.isfile(path):
+        return path
+    if os.path.isfile(path + ".exe"):
+        return path + ".exe"
+    return None
+
+
 def find_stockfish() -> str | None:
     env = os.environ.get("STOCKFISH_PATH")
     if env:
-        return env
-    for cand in ("stockfish", "/usr/games/stockfish", "/usr/local/bin/stockfish", "/opt/homebrew/bin/stockfish"):
-        path = shutil.which(cand) or (cand if os.path.exists(cand) else None)
-        if path:
+        # A bad STOCKFISH_PATH is reported by stockfish_path_problem(), not silently replaced.
+        return normalise_path(env)
+    for cand in ("stockfish", "stockfish.exe"):
+        if path := shutil.which(cand):
             return path
+    # Windows builds are named like stockfish-windows-x86-64-avx2.exe, which `which` won't match.
+    for directory in os.environ.get("PATH", "").split(os.pathsep):
+        if directory:
+            for cand in sorted(glob.glob(os.path.join(directory, "stockfish*.exe"))):
+                return cand
+    for cand in ("/usr/games/stockfish", "/usr/local/bin/stockfish", "/opt/homebrew/bin/stockfish"):
+        if os.path.isfile(cand):
+            return cand
     return None
+
+
+def stockfish_path_problem() -> str:
+    env = os.environ.get("STOCKFISH_PATH")
+    if env:
+        return (f"STOCKFISH_PATH={env!r} is not a Stockfish executable. "
+                "Set it to the .exe file itself, without quotes.")
+    return "Stockfish not found: install it, or set STOCKFISH_PATH to the Stockfish executable"
 
 
 def win_prob(cp: float) -> float:
@@ -68,14 +106,20 @@ class Analyzer(Protocol):
 class StockfishAnalyzer:
     def __init__(self, store: Store | None = None, path: str | None = None, depth: int = 10,
                  threads: int = 1, hash_mb: int = 64):
-        path = path or find_stockfish()
+        path = normalise_path(path) if path else find_stockfish()
         if not path:
-            raise RuntimeError("Stockfish not found: install it or set STOCKFISH_PATH")
+            raise RuntimeError(stockfish_path_problem())
         self.depth = depth
         self.store = store
         self._lock = threading.Lock()
-        self.engine = chess.engine.SimpleEngine.popen_uci(path)
-        self.engine.configure({"Threads": threads, "Hash": hash_mb})
+        try:
+            self.engine = chess.engine.SimpleEngine.popen_uci(path)
+            self.engine.configure({"Threads": threads, "Hash": hash_mb})
+        except (chess.engine.EngineError, chess.engine.EngineTerminatedError, OSError) as exc:
+            raise RuntimeError(
+                f"Stockfish at {path} failed to start ({exc}). If it crashes as soon as it starts, "
+                "your CPU may not support this build: try the 'compatible' / non-AVX2 download."
+            ) from exc
 
     def close(self) -> None:
         try:
