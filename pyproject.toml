@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "nemesis"
+version = "0.1.0"
+description = "A personal chess engine: it learns how you play, then plays the move that beats you."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "chess>=1.10",
+    "numpy>=1.24",
+    "httpx>=0.25",
+    "fastapi>=0.110",
+    "uvicorn>=0.25",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7"]
+
+[project.scripts]
+nemesis = "nemesis.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["nemesis*"]
+
+[tool.setuptools.package-data]
+"nemesis.web" = ["static/*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

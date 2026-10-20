@@ -1,0 +1,335 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Nemesis</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22%3E%3Ctext y=%22.9em%22 font-size=%2290%22%3E%E2%99%9E%3C/text%3E%3C/svg%3E">
+<style>
+  :root {
+    --bg: #f6f4f1; --panel: #ffffff; --ink: #1d1b19; --muted: #6f6a64; --line: #e3ded7;
+    --accent: #a3192b; --accent-soft: #f5dfe2; --light-sq: #ece3d4; --dark-sq: #b18c6a;
+    --hl: rgba(163, 25, 43, .28); --dot: rgba(29, 27, 25, .25); --good: #2f7d4f;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #141312; --panel: #1d1c1a; --ink: #ece8e2; --muted: #9c958c; --line: #2f2d2a;
+      --accent: #e0485c; --accent-soft: #3a1c21; --light-sq: #9c8a74; --dark-sq: #6a5341;
+      --hl: rgba(224, 72, 92, .38); --dot: rgba(0, 0, 0, .35); --good: #5cbf85;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+         font: 15px/1.45 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
+  header { display: flex; align-items: baseline; gap: 14px; padding: 18px 24px 6px; }
+  header h1 { margin: 0; font-size: 22px; letter-spacing: .02em; }
+  header h1 span { color: var(--accent); }
+  header p { margin: 0; color: var(--muted); }
+  main { display: grid; grid-template-columns: minmax(0, 560px) minmax(0, 1fr); gap: 20px; padding: 12px 24px 32px; }
+  @media (max-width: 960px) { main { grid-template-columns: 1fr; padding: 12px 16px 24px; } header { padding: 16px 16px 4px; flex-wrap: wrap; } }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 16px; }
+  h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); margin: 0 0 10px; }
+  h3 { font-size: 14px; margin: 16px 0 6px; }
+  .board { display: grid; grid-template-columns: repeat(8, 1fr); width: 100%; aspect-ratio: 1; border-radius: 6px; overflow: hidden; user-select: none; }
+  .sq { position: relative; display: flex; align-items: center; justify-content: center; cursor: pointer;
+        font-size: min(9vw, 52px); line-height: 1; }
+  .sq.l { background: var(--light-sq); } .sq.d { background: var(--dark-sq); }
+  .sq.last::before, .sq.sel::before { content: ""; position: absolute; inset: 0; background: var(--hl); }
+  .sq.target::after { content: ""; position: absolute; width: 28%; height: 28%; border-radius: 50%; background: var(--dot); }
+  .sq.incheck { box-shadow: inset 0 0 0 4px var(--accent); }
+  .pc { position: relative; z-index: 1; }
+  .pc.w { color: #fff; text-shadow: 0 0 2px #000, 0 0 1px #000, 0 1px 0 #000; }
+  .pc.b { color: #111; text-shadow: 0 0 1px rgba(255,255,255,.6); }
+  .coord { position: absolute; font-size: 10px; color: rgba(0,0,0,.45); font-family: ui-monospace, monospace; }
+  .coord.f { right: 3px; bottom: 1px; } .coord.r { left: 3px; top: 1px; }
+  .row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-top: 12px; }
+  label { color: var(--muted); font-size: 13px; }
+  select, input[type=text], input[type=number], textarea {
+    background: var(--bg); color: var(--ink); border: 1px solid var(--line); border-radius: 8px; padding: 7px 9px; font: inherit; }
+  textarea { width: 100%; min-height: 70px; font-family: ui-monospace, monospace; font-size: 12px; }
+  button { background: var(--accent); color: #fff; border: 0; border-radius: 8px; padding: 8px 14px; font: inherit; cursor: pointer; }
+  button.ghost { background: transparent; color: var(--ink); border: 1px solid var(--line); }
+  button:disabled { opacity: .5; cursor: default; }
+  input[type=range] { accent-color: var(--accent); width: 160px; }
+  .status { margin-top: 10px; color: var(--muted); min-height: 1.4em; }
+  .log { margin-top: 14px; max-height: 300px; overflow: auto; display: flex; flex-direction: column; gap: 8px; }
+  .msg { padding: 8px 10px; border-radius: 8px; background: var(--bg); }
+  .msg.nemesis { background: var(--accent-soft); }
+  .msg b { margin-right: 6px; }
+  .grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px; }
+  .stat { display: flex; justify-content: space-between; gap: 12px; padding: 4px 0; border-bottom: 1px dashed var(--line); }
+  .stat span:last-child { font-variant-numeric: tabular-nums; }
+  .trait { margin: 6px 0; }
+  .bar { height: 6px; background: var(--line); border-radius: 3px; position: relative; margin-top: 3px; }
+  .bar i { position: absolute; top: 0; bottom: 0; border-radius: 3px; background: var(--accent); }
+  .bar i.neg { background: var(--muted); }
+  .bar::after { content: ""; position: absolute; left: 50%; top: -2px; bottom: -2px; width: 1px; background: var(--muted); }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  td, th { text-align: left; padding: 4px 6px; border-bottom: 1px solid var(--line); }
+  td.n, th.n { text-align: right; font-variant-numeric: tabular-nums; }
+  .muted { color: var(--muted); }
+  .tabs { display: flex; gap: 6px; margin-bottom: 12px; }
+  .tabs button { background: transparent; color: var(--muted); border: 1px solid var(--line); }
+  .tabs button.on { color: var(--ink); border-color: var(--accent); }
+  .hidden { display: none; }
+  .progress { height: 4px; background: var(--line); border-radius: 2px; overflow: hidden; margin-top: 8px; }
+  .progress i { display: block; height: 100%; background: var(--accent); width: 0; transition: width .3s; }
+</style>
+</head>
+<body>
+<header>
+  <h1><span>Nemesis</span></h1>
+  <p>Not the best move. The move that beats <em>you</em>.</p>
+</header>
+<main>
+  <section class="panel">
+    <div class="row" style="margin-top:0">
+      <label>Player <select id="player"></select></label>
+      <label>You play <select id="color"><option value="white">White</option><option value="black">Black</option></select></label>
+      <button id="newgame">New game</button>
+    </div>
+    <div class="row">
+      <label for="risk">Risk</label>
+      <input id="risk" type="range" min="0" max="100" value="50">
+      <span id="risklabel" class="muted"></span>
+    </div>
+    <div style="margin-top:14px"><div id="board" class="board"></div></div>
+    <div class="row">
+      <button id="resign" class="ghost" disabled>Resign</button>
+      <button id="flip" class="ghost">Flip</button>
+    </div>
+    <div id="status" class="status"></div>
+    <div id="log" class="log"></div>
+  </section>
+
+  <section class="panel">
+    <div class="tabs">
+      <button data-tab="profile" class="on">Profile</button>
+      <button data-tab="import">Import games</button>
+      <button data-tab="thinking">Nemesis's thinking</button>
+    </div>
+
+    <div id="tab-profile">
+      <div id="profile"><p class="muted">Import a player's games to build a profile.</p></div>
+    </div>
+
+    <div id="tab-import" class="hidden">
+      <h2>Teach Nemesis who you are</h2>
+      <div class="row" style="margin-top:0">
+        <select id="src"><option value="lichess">Lichess</option><option value="chesscom">Chess.com</option><option value="pgn">Paste PGN</option></select>
+        <input id="username" type="text" placeholder="username">
+        <label>max games <input id="maxgames" type="number" value="200" min="10" max="2000" style="width:90px"></label>
+      </div>
+      <div id="pgnbox" class="hidden" style="margin-top:10px"><textarea id="pgn" placeholder="Paste PGN here"></textarea></div>
+      <div class="row"><button id="import">Import and train</button></div>
+      <div class="progress"><i id="bar"></i></div>
+      <div id="jobstatus" class="status"></div>
+    </div>
+
+    <div id="tab-thinking" class="hidden">
+      <h2>Last decision</h2>
+      <div id="thinking"><p class="muted">Once Nemesis moves, the candidates it weighed appear here: their score against perfect play and against you.</p></div>
+    </div>
+  </section>
+</main>
+
+<script>
+const GLYPH = { k: "♚", q: "♛", r: "♜", b: "♝", n: "♞", p: "♟" };
+const $ = (id) => document.getElementById(id);
+let game = null, selected = null, flipped = false;
+
+async function api(path, body) {
+  const opts = body === undefined ? {} : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) };
+  const r = await fetch(path, opts);
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(data.detail || r.statusText);
+  return data;
+}
+
+function parseFen(fen) {
+  const rows = fen.split(" ")[0].split("/");
+  const sq = {};
+  rows.forEach((row, i) => {
+    let f = 0;
+    for (const ch of row) {
+      if (/\d/.test(ch)) { f += +ch; continue; }
+      sq["abcdefgh"[f] + (8 - i)] = ch; f++;
+    }
+  });
+  return sq;
+}
+
+function render() {
+  const el = $("board"); el.innerHTML = "";
+  const pieces = parseFen(game ? game.fen : "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w");
+  const targets = new Set(selected && game ? (game.legal[selected] || []).map(u => u.slice(2, 4)) : []);
+  const last = game && game.last ? [game.last.slice(0, 2), game.last.slice(2, 4)] : [];
+  const turn = game ? game.turn : "white";
+  for (let r = 0; r < 8; r++) for (let f = 0; f < 8; f++) {
+    const rank = flipped ? r + 1 : 8 - r, file = flipped ? 7 - f : f;
+    const name = "abcdefgh"[file] + rank;
+    const d = document.createElement("div");
+    d.className = "sq " + ((file + rank) % 2 ? "l" : "d");
+    if (last.includes(name)) d.classList.add("last");
+    if (name === selected) d.classList.add("sel");
+    if (targets.has(name)) d.classList.add("target");
+    const p = pieces[name];
+    if (p) {
+      const s = document.createElement("span");
+      const white = p === p.toUpperCase();
+      s.className = "pc " + (white ? "w" : "b");
+      s.textContent = GLYPH[p.toLowerCase()];
+      d.appendChild(s);
+      if (game && game.check && p.toLowerCase() === "k" && (white ? "white" : "black") === turn) d.classList.add("incheck");
+    }
+    if (f === 7) d.insertAdjacentHTML("beforeend", `<span class="coord r">${rank}</span>`);
+    if (r === 7) d.insertAdjacentHTML("beforeend", `<span class="coord f">${"abcdefgh"[file]}</span>`);
+    d.onclick = () => click(name);
+    el.appendChild(d);
+  }
+}
+
+async function click(name) {
+  if (!game || game.finished) return;
+  if (selected && (game.legal[selected] || []).some(u => u.slice(2, 4) === name)) {
+    const opts = game.legal[selected].filter(u => u.slice(2, 4) === name);
+    const uci = opts.find(u => u.length === 4 || u.endsWith("q")) || opts[0];
+    selected = null;
+    $("status").textContent = "Nemesis is thinking…";
+    game.last = uci; render();
+    try { game = await api(`/api/games/${game.id}/move`, { uci }); }
+    catch (e) { $("status").textContent = e.message; }
+    update();
+    return;
+  }
+  selected = game.legal[name] ? name : null;
+  render();
+}
+
+function update() {
+  render();
+  const log = $("log"); log.innerHTML = "";
+  for (const m of [...game.log].reverse()) {
+    const d = document.createElement("div");
+    d.className = "msg " + m.who;
+    d.innerHTML = m.who === "you" ? `<b>You</b>${m.san}` : `<b>Nemesis</b>${escapeHtml(m.text || "")}`;
+    log.appendChild(d);
+  }
+  $("resign").disabled = game.finished;
+  $("status").textContent = game.finished ? `Game over: ${game.result}` : (game.turn === game.human ? "Your move." : "Nemesis is thinking…");
+  const lastN = [...game.log].reverse().find(m => m.candidates);
+  if (lastN) showThinking(lastN);
+  if (game.finished) setTimeout(() => loadProfile($("player").value), 4000);
+}
+
+function showThinking(m) {
+  const rows = m.candidates.map(c => `<tr><td>${c.san}</td><td class="n">${pct(c.objective)}</td><td class="n">${pct(c.exploit)}</td><td class="n">${c.score.toFixed(3)}</td></tr>`).join("");
+  $("thinking").innerHTML = `<p>${escapeHtml(m.text)}</p>
+    <table><tr><th>Move</th><th class="n">vs perfect play</th><th class="n">vs you</th><th class="n">score</th></tr>${rows}</table>
+    <p class="muted">"vs you" assumes you reply the way your model predicts. The risk dial sets how much that counts and how unsound a move may be.</p>`;
+}
+
+const pct = (x) => x == null ? "–" : (100 * x).toFixed(0) + "%";
+const escapeHtml = (s) => s.replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+function riskLabel() {
+  const v = +$("risk").value;
+  $("risklabel").textContent = v < 20 ? "sound, quietly personal" : v < 60 ? "steering you into trouble" : v < 85 ? "setting traps" : "full hustler";
+}
+
+async function loadPlayers(select) {
+  const ps = await api("/api/players");
+  const sel = $("player"); const cur = select || sel.value;
+  sel.innerHTML = ps.map(p => `<option value="${p.player}">${p.player} (${p.games})</option>`).join("") || `<option value="">no players yet</option>`;
+  if (cur && ps.some(p => p.player === cur)) sel.value = cur;
+  if (sel.value) loadProfile(sel.value);
+}
+
+async function loadProfile(player) {
+  if (!player) return;
+  let p;
+  try { p = await api(`/api/profile/${encodeURIComponent(player)}`); }
+  catch (e) { $("profile").innerHTML = `<p class="muted">${escapeHtml(e.message)}</p>`; return; }
+  const h = p.metrics && p.metrics.holdout, pr = p.metrics && p.metrics.holdout_prior;
+  const maxAbs = Math.max(0.5, ...p.traits.map(t => Math.abs(t.delta)));
+  const traits = p.traits.map(t => {
+    const w = 50 * Math.abs(t.delta) / maxAbs;
+    const style = t.delta >= 0 ? `left:50%;width:${w}%` : `left:${50 - w}%;width:${w}%`;
+    return `<div class="trait">You ${escapeHtml(t.text)} <span class="muted">${t.delta >= 0 ? "more" : "less"} than most</span>
+      <div class="bar"><i class="${t.delta < 0 ? "neg" : ""}" style="${style}"></i></div></div>`;
+  }).join("");
+  const stat = (k, v) => `<div class="stat"><span>${k}</span><span>${v}</span></div>`;
+  const phases = Object.entries(p.by_phase).map(([k, v]) => stat(k, `${v.avg_cp_loss}cp avg · ${pct(v.blunder_rate)} blunders`)).join("");
+  const openings = p.openings.map(o => `<tr><td>${escapeHtml(o.opening)}</td><td class="n">${o.games}</td><td class="n">${pct(o.score)}</td></tr>`).join("");
+  const weak = p.weakest_openings.map(o => escapeHtml(o.opening)).join(", ");
+  $("profile").innerHTML = `
+    <h2>${escapeHtml(p.player)}</h2>
+    <p class="muted">${p.games} games · ${p.moves_analysed} moves analysed · overall score ${pct(p.score)}</p>
+    ${h ? `<p>On your newest games, Nemesis predicts your exact move <b>${pct(h.top1)}</b> of the time (top 3: ${pct(h.top3)}).
+      A generic player model gets ${pct(pr.top1)}; "you'll play Stockfish's move" gets ${pct(h.stockfish_top1)}.</p>` : ""}
+    <div class="grid2">
+      <div><h3>What sets you apart</h3>${traits}</div>
+      <div>
+        <h3>Style</h3>
+        ${stat("Aggressive moves (captures, checks, king attacks)", pct(p.style.aggression))}
+        ${stat("Trades", pct(p.style.trade_appetite))}
+        ${stat("Sacrifices", pct(p.style.sacrifice_rate))}
+        ${stat("Retreats", pct(p.style.retreat_rate))}
+        ${stat("Plays the engine move", pct(p.style.best_move_rate))}
+        <h3>Blind spots</h3>
+        ${stat("Leaves a piece hanging", pct(p.blind_spots.hangs_piece))}
+        ${stat("Ignores a threat", pct(p.blind_spots.ignores_threat))}
+        ${stat("Walks into a fork", pct(p.blind_spots.allows_fork))}
+        <h3>By phase</h3>${phases}
+        ${p.clock.moves_in_time_pressure ? `<h3>Under 30 seconds</h3>${stat("Blunder rate", pct(p.clock.blunder_rate_time_pressure) + " vs " + pct(p.clock.blunder_rate_normal))}` : ""}
+      </div>
+    </div>
+    ${openings ? `<h3>Openings</h3><table><tr><th>Opening</th><th class="n">games</th><th class="n">score</th></tr>${openings}</table>` : ""}
+    ${weak ? `<p><b>Where Nemesis will take you:</b> ${weak}</p>` : ""}
+    <div class="row"><button class="ghost" id="retrain">Retrain</button></div>`;
+  $("retrain").onclick = async () => { const { job } = await api(`/api/train/${encodeURIComponent(player)}`, {}); watchJob(job); showTab("import"); };
+}
+
+async function watchJob(id) {
+  const tick = async () => {
+    const j = await api(`/api/jobs/${id}`);
+    $("bar").style.width = (100 * j.progress) + "%";
+    $("jobstatus").textContent = j.status === "error" ? `Error: ${j.message}` : j.message;
+    if (j.status === "running") setTimeout(tick, 1000);
+    else if (j.status === "done") { await loadPlayers(j.player); showTab("profile"); }
+  };
+  tick();
+}
+
+function showTab(name) {
+  document.querySelectorAll(".tabs button").forEach(b => b.classList.toggle("on", b.dataset.tab === name));
+  for (const t of ["profile", "import", "thinking"]) $("tab-" + t).classList.toggle("hidden", t !== name);
+}
+
+document.querySelectorAll(".tabs button").forEach(b => b.onclick = () => showTab(b.dataset.tab));
+$("src").onchange = () => $("pgnbox").classList.toggle("hidden", $("src").value !== "pgn");
+$("import").onclick = async () => {
+  try {
+    const { job } = await api("/api/import", { source: $("src").value, username: $("username").value, max_games: +$("maxgames").value, pgn: $("pgn").value || null });
+    watchJob(job);
+  } catch (e) { $("jobstatus").textContent = e.message; }
+};
+$("player").onchange = () => loadProfile($("player").value);
+$("risk").oninput = riskLabel;
+$("risk").onchange = async () => { if (game && !game.finished) game = await api(`/api/games/${game.id}/risk`, { risk: $("risk").value / 100 }); };
+$("newgame").onclick = async () => {
+  const player = $("player").value;
+  if (!player) { showTab("import"); $("jobstatus").textContent = "Import a player first."; return; }
+  flipped = $("color").value === "black";
+  selected = null;
+  $("status").textContent = "Starting…";
+  try { game = await api("/api/games", { player, color: $("color").value, risk: $("risk").value / 100 }); update(); }
+  catch (e) { $("status").textContent = e.message; }
+};
+$("resign").onclick = async () => { if (game) { game = await api(`/api/games/${game.id}/resign`, {}); update(); } };
+$("flip").onclick = () => { flipped = !flipped; render(); };
+
+riskLabel(); render(); loadPlayers();
+</script>
+</body>
+</html>
