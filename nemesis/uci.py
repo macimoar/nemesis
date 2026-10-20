@@ -22,6 +22,7 @@ OPTIONS = [
     "option name Learn type check default true",
     "option name StockfishPath type string default <empty>",
     "option name Commentary type combo default X-Ray var X-Ray var Poker Face",
+    "option name Elo type spin default 0 min 0 max 2400",
 ]
 
 
@@ -30,7 +31,7 @@ class UCI:
         self.out = out
         self.db = db or str(DEFAULT_DB)
         self.opts = {"player": "", "risk": "50", "depth": "10", "deep": "false", "learn": "true",
-                     "stockfishpath": "", "commentary": "X-Ray"}
+                     "stockfishpath": "", "commentary": "X-Ray", "elo": "0"}
         self.engine: Nemesis | None = None
         self.store: Store | None = None
         self.start_fen = chess.STARTING_FEN
@@ -38,6 +39,7 @@ class UCI:
         self.board = chess.Board()
         self.nemesis_color: chess.Color | None = None
         self.last: tuple[list[str], Decision] | None = None   # moves after Nemesis's last move, and why
+        self.annotations: list[dict] = []                      # what Nemesis was thinking, for review
 
     def send(self, line: str) -> None:
         self.out.write(line + "\n")
@@ -50,6 +52,7 @@ class UCI:
                 self.store, self.opts["player"] or "anonymous", risk=int(self.opts["risk"]) / 100,
                 depth=int(self.opts["depth"]), deep=self.opts["deep"] == "true",
                 stockfish_path=self.opts["stockfishpath"] or None, mode=self.opts["commentary"],
+                elo=int(self.opts["elo"] or 0) or None,
             )
         return self.engine
 
@@ -74,6 +77,8 @@ class UCI:
             self.engine.deep = value.lower() == "true"
         elif name == "commentary":
             self.engine.mode = commentary.normalise_mode(value)
+        elif name == "elo":
+            self.engine.fixed_elo = int(value or 0) or None
         elif name in ("depth", "stockfishpath"):
             self.engine.close()
             self.engine = None
@@ -84,10 +89,12 @@ class UCI:
                 and len(self.moves) >= 10 and self.store is not None):
             result = self.board.result(claim_draw=True)
             record_game(self.store, self.opts["player"], not self.nemesis_color, self.moves,
-                        result=None if result == "*" else result, start_fen=self.start_fen)
+                        result=None if result == "*" else result, start_fen=self.start_fen,
+                        risk=int(self.opts["risk"]) / 100, annotations=self.annotations)
             self.send("info string game recorded; run `nemesis train` to update the model")
         self.moves, self.nemesis_color = [], None
         self.last = None
+        self.annotations = []
 
     def position(self, tokens: list[str]) -> None:
         if tokens[0] == "startpos":
@@ -131,6 +138,7 @@ class UCI:
         for line in decision.lines:  # UCI info strings can't contain newlines: one per line
             self.send(f"info string {line.replace('**', '')}")
         self.last = (self.moves + [decision.move.uci()], decision)
+        self.annotations.append(decision.annotation(len(self.moves), engine.risk))
         self.send(f"bestmove {decision.move.uci()}")
 
     def handle(self, line: str) -> bool:

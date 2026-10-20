@@ -42,6 +42,31 @@ CREATE TABLE IF NOT EXISTS evals (
     lines TEXT NOT NULL                -- JSON {uci: cp from side-to-move's view}
 );
 
+CREATE TABLE IF NOT EXISTS ratings (
+    entity TEXT PRIMARY KEY,           -- player:<name> | nemesis:<tier>
+    rating REAL NOT NULL,
+    games  INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS rating_history (
+    game_id TEXT NOT NULL,
+    entity  TEXT NOT NULL,
+    before  REAL NOT NULL,
+    after   REAL NOT NULL,
+    PRIMARY KEY (game_id, entity)
+);
+
+CREATE TABLE IF NOT EXISTS annotations (  -- what Nemesis was thinking, saved at play time
+    game_id TEXT PRIMARY KEY,
+    data    TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS reviews (
+    game_id TEXT PRIMARY KEY,
+    depth   INTEGER NOT NULL,
+    data    TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS models (
     player     TEXT PRIMARY KEY,
     weights    TEXT NOT NULL,
@@ -157,6 +182,70 @@ class Store:
             self.conn.execute(
                 "INSERT OR REPLACE INTO evals VALUES (?,?,?)", (fen, depth, json.dumps(lines))
             )
+            self.conn.commit()
+
+    def game(self, game_id: str) -> GameRow | None:
+        with self._lock:
+            row = self.conn.execute("SELECT * FROM games WHERE id=?", (game_id,)).fetchone()
+        return GameRow(**dict(row)) if row else None
+
+    # -- ratings -----------------------------------------------------------
+    def get_rating(self, entity: str) -> tuple[float, int] | None:
+        with self._lock:
+            row = self.conn.execute("SELECT rating, games FROM ratings WHERE entity=?", (entity,)).fetchone()
+        return (row["rating"], row["games"]) if row else None
+
+    def set_rating(self, entity: str, rating: float, games: int) -> None:
+        with self._lock:
+            self.conn.execute("INSERT OR REPLACE INTO ratings VALUES (?,?,?)", (entity, rating, games))
+            self.conn.commit()
+
+    def rating_change(self, game_id: str) -> dict[str, tuple[float, float]]:
+        with self._lock:
+            rows = self.conn.execute(
+                "SELECT entity, before, after FROM rating_history WHERE game_id=?", (game_id,)).fetchall()
+        return {r["entity"]: (r["before"], r["after"]) for r in rows}
+
+    def apply_rating_changes(self, game_id: str, changes: dict[str, tuple[float, float, int]]) -> bool:
+        """Atomically record {entity: (before, after, games_after)} for a game. False if already rated."""
+        with self._lock:
+            if self.conn.execute("SELECT 1 FROM rating_history WHERE game_id=?", (game_id,)).fetchone():
+                return False
+            for entity, (before, after, games) in changes.items():
+                self.conn.execute("INSERT INTO rating_history VALUES (?,?,?,?)", (game_id, entity, before, after))
+                self.conn.execute("INSERT OR REPLACE INTO ratings VALUES (?,?,?)", (entity, after, games))
+            self.conn.commit()
+            return True
+
+    def rating_history(self, entity: str, limit: int = 20) -> list[dict]:
+        with self._lock:
+            rows = self.conn.execute(
+                "SELECT h.game_id, h.before, h.after, g.played_at FROM rating_history h "
+                "LEFT JOIN games g ON g.id=h.game_id WHERE h.entity=? ORDER BY g.played_at DESC, h.rowid DESC "
+                "LIMIT ?", (entity, limit)).fetchall()
+        return [dict(r) for r in rows]
+
+    # -- annotations and reviews -------------------------------------------
+    def put_json(self, table: str, game_id: str, data, depth: int | None = None) -> None:
+        assert table in ("annotations", "reviews")
+        with self._lock:
+            if table == "reviews":
+                self.conn.execute("INSERT OR REPLACE INTO reviews VALUES (?,?,?)", (game_id, depth or 0, json.dumps(data)))
+            else:
+                self.conn.execute("INSERT OR REPLACE INTO annotations VALUES (?,?)", (game_id, json.dumps(data)))
+            self.conn.commit()
+
+    def get_json(self, table: str, game_id: str, min_depth: int = 0):
+        assert table in ("annotations", "reviews")
+        with self._lock:
+            row = self.conn.execute(f"SELECT * FROM {table} WHERE game_id=?", (game_id,)).fetchone()
+        if row is None or (table == "reviews" and row["depth"] < min_depth):
+            return None
+        return json.loads(row["data"])
+
+    def delete_review(self, game_id: str) -> None:
+        with self._lock:
+            self.conn.execute("DELETE FROM reviews WHERE game_id=?", (game_id,))
             self.conn.commit()
 
     # -- models ------------------------------------------------------------

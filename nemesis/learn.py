@@ -9,6 +9,7 @@ from typing import Callable
 import chess
 import chess.pgn
 
+from nemesis import ratings
 from nemesis.analysis.stockfish import Analyzer
 from nemesis.ingest.pgn import to_rows
 from nemesis.profile.move_model import MoveModel, build_samples, train_player, train_population
@@ -38,10 +39,13 @@ def train_pooled(store: Store, analyzer: Analyzer, max_games_each: int | None = 
 
 
 def record_game(store: Store, player: str, player_color: chess.Color, moves: list[str],
-                result: str | None = None, start_fen: str = chess.STARTING_FEN) -> str | None:
+                result: str | None = None, start_fen: str = chess.STARTING_FEN,
+                risk: float | None = None, annotations: list[dict] | None = None) -> str | None:
     """Store a game played against Nemesis so the next retrain learns from it.
 
     `result` is a PGN result ("1-0", "0-1", "1/2-1/2"). If it is None, it is taken from the board.
+    With `risk`, a decided game is also rated; `annotations` (Decision.annotation per Nemesis
+    move) are kept for the game review.
     """
     if not moves:
         return None
@@ -71,4 +75,8 @@ def record_game(store: Store, player: str, player_color: chess.Color, moves: lis
     for m in move_rows:
         m.game_id = row.id
     store.add_game(row, move_rows)
+    if annotations:
+        store.put_json("annotations", row.id, {"risk": risk, "moves": annotations})
+    if risk is not None and row.result is not None:
+        ratings.update_after_game(store, row.id, player, risk, row.result)
     return row.id

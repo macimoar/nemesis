@@ -71,7 +71,10 @@ pip install -e ".[dev]"
 nemesis import lichess  <username> --max 300     # or: chesscom <username>, or: pgn <username> --file games.pgn
 nemesis train <username>                         # Stockfish-analyses your moves and fits your model
 nemesis profile <username>                       # what Nemesis learned about you
-nemesis play <username> --color black --risk 0.8 # play in the terminal (--commentary xray|poker)
+nemesis play <username> --color black --risk 0.8 # play in the terminal (--commentary xray|poker, --elo N)
+nemesis games <username>                         # list your games
+nemesis review <username> [--game ID]            # review a game (default: the latest)
+nemesis ratings <username>                       # your rating and Nemesis's, per risk tier
 nemesis serve                                    # web app at http://127.0.0.1:8000
 nemesis uci                                      # UCI engine for Arena / Cute Chess / En Croissant
 ```
@@ -90,13 +93,38 @@ Once several players are imported, `nemesis train --population` fits the shared 
 | `Deep` | Look two of your moves ahead (slower) |
 | `Learn` | Save finished games for retraining |
 | `Commentary` | `X-Ray` or `Poker Face`; sent as `info string` lines |
+| `Elo` | Nemesis's strength; 0 = match me (your rating + 50) |
 | `StockfishPath` | Path to the Stockfish binary |
 
 The database lives at `~/.nemesis/nemesis.db`. Override it with `--db` or `NEMESIS_DB`.
 
+## Strength and ratings
+
+Nemesis is meant to be a challenge you can beat, not a wall.
+
+- **Strength.** By default it plays at **your rating + 50** ("Match me"), so winning takes good play. You can also pick a fixed strength from 800 to 2400, where 2400 is full strength. Weaker targets don't play random moves: Nemesis still uses everything it knows about you, but samples its move instead of always taking the top one, and now and then makes a human-style slip. In X-Ray mode it admits it when a move isn't its best.
+- **Your rating** starts from the rating recorded in your imported Chess.com/Lichess games. If none of them record one, it starts at 1200. After that, only games against Nemesis move it.
+- **Nemesis's ratings** are tracked separately for each risk tier: Sound, Steering, Trapper and Hustler. Each tier starts at your rating + 50 and then earns its rating from results, so you can see which version of Nemesis actually beats you. Ratings marked `?` are provisional: they have fewer than 10 games behind them.
+- **Calibration.** The strength curve is fitted with `scripts/calibrate_strength.py`, which plays Nemesis at a target Elo against Stockfish's own Elo-limited mode. Stockfish's scale is calibrated for engines and maps only roughly onto online ratings. Your results-based ratings correct for that over time.
+
+## Game review
+
+Any game can be reviewed: games played here and imported ones. In the web app, open the **Games** tab, or press **Review this game** when a game ends.
+
+- **Accuracy** for both sides, using the Lichess formula.
+- **Move labels**: Brilliant, Best, Excellent, Good, Inaccuracy, Mistake, Miss, Blunder. A move's label depends on how much it lowered the mover's winning chances.
+- **Replay** on the board with ◀ ▶ (or the arrow keys), and a clickable evaluation graph.
+- **Key moments**: the turning points in plain English, with the better move.
+- **Nemesis's side**, for games against Nemesis:
+  - the traps it set, and which ones you fell for;
+  - how often it predicted your exact move;
+  - the strength it played at.
+
+  All of this is saved while the game is played, so retraining later doesn't change it.
+
 ## Does exploitation pay?
 
-`scripts/simulate.py` generates games for synthetic players with known styles. `scripts/benchmark.py` then plays Nemesis (risk 100) and plain Stockfish at the same depth against the same player, using the same seeds. Results after training on 30 games of each:
+`scripts/simulate.py` generates games for synthetic players with known styles. `scripts/benchmark.py` then plays Nemesis (risk 100, full strength) and plain Stockfish at the same depth against the same player, using the same seeds. Results after training on 30 games of each:
 
 | Simulated opponent | Plain Stockfish (depth 8) | Nemesis (depth 8, risk 100) |
 |---|---|---|
@@ -113,11 +141,15 @@ nemesis/
   analysis/     stockfish.py (MultiPV analysis + persistent eval cache)
   features.py   per-move feature vectors
   profile/      move_model.py (the opponent model), style.py (profile), repertoire.py (opening tree)
-  search.py     exploit search + risk dial + explanations
+  search.py     exploit search + risk dial
+  strength.py   playing-strength limit (target Elo)
+  commentary.py what Nemesis says (X-Ray / Poker Face)
+  ratings.py    Elo for you and for each Nemesis risk tier
+  review.py     game review: accuracy, labels, key moments, Nemesis's side
   engine.py     Nemesis = model + opening tree + search
   learn.py      training pipeline; recording games played against Nemesis
   uci.py, cli.py, web/
-scripts/        simulate.py, benchmark.py
+scripts/        simulate.py, benchmark.py, calibrate_strength.py
 tests/
 ```
 

@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import random
+
 import chess
 
-from nemesis import commentary
+from nemesis import commentary, ratings
 from nemesis.analysis.stockfish import Analyzer, StockfishAnalyzer, impute_losses
 from nemesis.profile.move_model import load_player_model
 from nemesis.profile.repertoire import OpeningTree
@@ -15,8 +17,10 @@ from nemesis.store import Store
 class Nemesis:
     def __init__(self, store: Store, player: str, risk: float = 0.5, depth: int = 10,
                  deep: bool = False, analyzer: Analyzer | None = None, stockfish_path: str | None = None,
-                 mode: str = commentary.XRAY):
+                 mode: str = commentary.XRAY, elo: float | None = None, seed: int | None = None):
         self.store = store
+        self.fixed_elo = elo          # None or 0: "match me" (your rating + 50)
+        self.rng = random.Random(seed)
         self.mode = commentary.normalise_mode(mode)
         self.depth = depth
         self.deep = deep
@@ -34,10 +38,14 @@ class Nemesis:
         self.set_player(self.player)
 
     def choose(self, board: chess.Board, human_clock: float | None = None) -> Decision:
-        searcher = Searcher(self.analyzer, self.model, self.tree, risk=self.risk, deep=self.deep)
+        searcher = Searcher(self.analyzer, self.model, self.tree, risk=self.risk, deep=self.deep,
+                            elo=self.target_elo(), rng=self.rng)
         decision = searcher.choose(board, human_clock)
         decision.lines = commentary.before(board, decision, self.mode)
         return decision
+
+    def target_elo(self) -> float:
+        return ratings.target_elo(self.store, self.player, self.fixed_elo)
 
     def react(self, board: chess.Board, decision: Decision, reply: chess.Move) -> list[str]:
         """Comment on the human's reply. `board` is the position after Nemesis's move."""

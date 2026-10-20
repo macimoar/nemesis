@@ -10,12 +10,18 @@
     --bg: #f6f4f1; --panel: #ffffff; --ink: #1d1b19; --muted: #6f6a64; --line: #e3ded7;
     --accent: #a3192b; --accent-soft: #f5dfe2; --light-sq: #ece3d4; --dark-sq: #b18c6a;
     --hl: rgba(163, 25, 43, .28); --dot: rgba(29, 27, 25, .25); --good: #2f7d4f;
+    --l-brilliant: #1b8a9e; --l-best: #2f7d4f; --l-excellent: #5a9a3c; --l-good: #7f8f6a;
+    --l-inaccuracy: #c9a227; --l-mistake: #d9822b; --l-miss: #c2563a; --l-blunder: #b3261e;
+    --graph-white: #f1ece4; --graph-black: #3a3530;
   }
   @media (prefers-color-scheme: dark) {
     :root:not([data-theme="light"]) {
       --bg: #141312; --panel: #1d1c1a; --ink: #ece8e2; --muted: #9c958c; --line: #2f2d2a;
       --accent: #e0485c; --accent-soft: #3a1c21; --light-sq: #9c8a74; --dark-sq: #6a5341;
       --hl: rgba(224, 72, 92, .38); --dot: rgba(0, 0, 0, .35); --good: #5cbf85;
+      --l-brilliant: #3fb8cc; --l-best: #5cbf85; --l-excellent: #84c262; --l-good: #a3ad8f;
+      --l-inaccuracy: #e2bf45; --l-mistake: #ec9a48; --l-miss: #e07a5c; --l-blunder: #ef5b52;
+      --graph-white: #d9d2c7; --graph-black: #2a2724;
     }
   }
   * { box-sizing: border-box; }
@@ -80,6 +86,27 @@
   .tabs button.on { color: var(--ink); border-color: var(--accent); }
   .hidden { display: none; }
   .progress { height: 4px; background: var(--line); border-radius: 2px; overflow: hidden; margin-top: 8px; }
+  .strip { display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: baseline; margin-top: 12px; font-size: 14px; }
+  .strip b { font-variant-numeric: tabular-nums; }
+  .strip .delta.up { color: var(--good); } .strip .delta.down { color: var(--accent); }
+  .lab { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 6px; vertical-align: middle; }
+  .t-brilliant { color: var(--l-brilliant); } .t-best { color: var(--l-best); } .t-excellent { color: var(--l-excellent); }
+  .t-good { color: var(--l-good); } .t-inaccuracy { color: var(--l-inaccuracy); } .t-mistake { color: var(--l-mistake); }
+  .t-miss { color: var(--l-miss); } .t-blunder { color: var(--l-blunder); }
+  .b-brilliant { background: var(--l-brilliant); } .b-best { background: var(--l-best); } .b-excellent { background: var(--l-excellent); }
+  .b-good { background: var(--l-good); } .b-inaccuracy { background: var(--l-inaccuracy); } .b-mistake { background: var(--l-mistake); }
+  .b-miss { background: var(--l-miss); } .b-blunder { background: var(--l-blunder); }
+  .graph { width: 100%; height: 90px; display: block; margin-top: 12px; cursor: pointer; border-radius: 6px; overflow: hidden; }
+  .moves { display: grid; grid-template-columns: 34px 1fr 1fr; gap: 2px 6px; margin-top: 12px; max-height: 220px; overflow: auto; font-size: 14px; }
+  .moves span.n { color: var(--muted); text-align: right; }
+  .moves button { background: transparent; color: var(--ink); border: 0; padding: 2px 6px; border-radius: 6px; text-align: left; font: inherit; }
+  .moves button.on { background: var(--accent-soft); }
+  .now { margin-top: 10px; min-height: 2.8em; }
+  .accs { display: flex; gap: 16px; flex-wrap: wrap; }
+  .acc { flex: 1; min-width: 130px; padding: 12px; border: 1px solid var(--line); border-radius: 10px; text-align: center; }
+  .acc big { display: block; font-size: 30px; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .moment { display: block; width: 100%; text-align: left; background: var(--bg); color: var(--ink); border: 1px solid var(--line); margin: 6px 0; }
+  .gamerow td:last-child { text-align: right; }
   .progress i { display: block; height: 100%; background: var(--accent); width: 0; transition: width .3s; }
 </style>
 </head>
@@ -101,18 +128,40 @@
       <span id="risklabel" class="muted"></span>
     </div>
     <div class="row">
+      <label>Strength <select id="strength">
+        <option value="0">Match me (your rating + 50)</option>
+      </select></label>
+    </div>
+    <div class="row">
       <label>Commentary <select id="commentary">
         <option value="xray">X-Ray: the full breakdown</option>
         <option value="poker">Poker Face: says little, gives nothing away</option>
       </select></label>
     </div>
-    <div style="margin-top:14px"><div id="board" class="board"></div></div>
-    <div class="row">
-      <button id="resign" class="ghost" disabled>Resign</button>
-      <button id="flip" class="ghost">Flip</button>
+    <div id="strip" class="strip"></div>
+    <div style="margin-top:12px"><div id="board" class="board"></div></div>
+    <div id="playbar">
+      <div class="row">
+        <button id="resign" class="ghost" disabled>Resign</button>
+        <button id="flip" class="ghost">Flip</button>
+        <button id="reviewgame" class="hidden">Review this game</button>
+      </div>
+      <div id="status" class="status"></div>
+      <div id="log" class="log"></div>
     </div>
-    <div id="status" class="status"></div>
-    <div id="log" class="log"></div>
+    <div id="reviewbar" class="hidden">
+      <div class="row">
+        <button class="ghost" id="rv-first" aria-label="First move">⏮</button>
+        <button class="ghost" id="rv-prev" aria-label="Previous move">◀</button>
+        <button class="ghost" id="rv-next" aria-label="Next move">▶</button>
+        <button class="ghost" id="rv-last" aria-label="Last move">⏭</button>
+        <button class="ghost" id="rv-flip">Flip</button>
+        <button id="rv-exit">Back to play</button>
+      </div>
+      <div id="rv-now" class="now"></div>
+      <svg id="graph" class="graph" preserveAspectRatio="none" role="img" aria-label="Evaluation graph"></svg>
+      <div id="rv-moves" class="moves"></div>
+    </div>
   </section>
 
   <section class="panel">
@@ -120,6 +169,8 @@
       <button data-tab="profile" class="on">Profile</button>
       <button data-tab="import">Import games</button>
       <button data-tab="thinking">Nemesis's thinking</button>
+      <button data-tab="games">Games</button>
+      <button data-tab="review" class="hidden" id="reviewtab">Review</button>
     </div>
 
     <div id="tab-profile">
@@ -139,6 +190,17 @@
       <div id="jobstatus" class="status"></div>
     </div>
 
+    <div id="tab-games" class="hidden">
+      <h2>Your games</h2>
+      <div id="games"><p class="muted">No games yet.</p></div>
+      <div class="progress"><i id="rv-bar"></i></div>
+      <div id="rv-status" class="status"></div>
+    </div>
+
+    <div id="tab-review" class="hidden">
+      <div id="review"></div>
+    </div>
+
     <div id="tab-thinking" class="hidden">
       <h2>Last decision</h2>
       <div id="thinking"><p class="muted">Once Nemesis moves, the options it weighed appear here, with its chances for each one if you play perfectly and against you specifically.</p></div>
@@ -150,6 +212,7 @@
 const GLYPH = { k: "♚", q: "♛", r: "♜", b: "♝", n: "♞", p: "♟" };
 const $ = (id) => document.getElementById(id);
 let game = null, selected = null, flipped = false;
+let review = null, rply = -1;   // review mode: the reviewed game and the ply shown (-1 = start)
 
 async function api(path, body) {
   const opts = body === undefined ? {} : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) };
@@ -174,9 +237,14 @@ function parseFen(fen) {
 
 function render() {
   const el = $("board"); el.innerHTML = "";
-  const pieces = parseFen(game ? game.fen : "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w");
-  const targets = new Set(selected && game ? (game.legal[selected] || []).map(u => u.slice(2, 4)) : []);
-  const last = game && game.last ? [game.last.slice(0, 2), game.last.slice(2, 4)] : [];
+  let fen = game ? game.fen : "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w", lastUci = game && game.last;
+  if (review) {
+    fen = rply < 0 ? review.game.start_fen : review.moves[rply].fen_after;
+    lastUci = rply < 0 ? null : review.moves[rply].uci;
+  }
+  const pieces = parseFen(fen);
+  const targets = new Set(selected && game && !review ? (game.legal[selected] || []).map(u => u.slice(2, 4)) : []);
+  const last = lastUci ? [lastUci.slice(0, 2), lastUci.slice(2, 4)] : [];
   const turn = game ? game.turn : "white";
   for (let r = 0; r < 8; r++) for (let f = 0; f < 8; f++) {
     const rank = flipped ? r + 1 : 8 - r, file = flipped ? 7 - f : f;
@@ -193,7 +261,7 @@ function render() {
       s.className = "pc " + (white ? "w" : "b");
       s.textContent = GLYPH[p.toLowerCase()];
       d.appendChild(s);
-      if (game && game.check && p.toLowerCase() === "k" && (white ? "white" : "black") === turn) d.classList.add("incheck");
+      if (!review && game && game.check && p.toLowerCase() === "k" && (white ? "white" : "black") === turn) d.classList.add("incheck");
     }
     if (f === 7) d.insertAdjacentHTML("beforeend", `<span class="coord r">${rank}</span>`);
     if (r === 7) d.insertAdjacentHTML("beforeend", `<span class="coord f">${"abcdefgh"[file]}</span>`);
@@ -203,7 +271,7 @@ function render() {
 }
 
 async function click(name) {
-  if (!game || game.finished) return;
+  if (review || !game || game.finished) return;
   if (selected && (game.legal[selected] || []).some(u => u.slice(2, 4) === name)) {
     const opts = game.legal[selected].filter(u => u.slice(2, 4) === name);
     const uci = opts.find(u => u.length === 4 || u.endsWith("q")) || opts[0];
@@ -232,6 +300,8 @@ function update() {
   $("resign").disabled = game.finished;
   $("status").textContent = game.finished ? `Game over: ${game.result}` : (game.turn === game.human ? "Your move." : "Nemesis is thinking…");
   $("commentary").value = game.commentary;
+  $("reviewgame").classList.toggle("hidden", !(game.finished && game.game_id));
+  renderStrip(game.ratings, game.tier, game.elo);
   showThinking();
   if (game.finished) setTimeout(() => loadProfile($("player").value), 4000);
 }
@@ -270,7 +340,7 @@ async function loadPlayers(select) {
   const sel = $("player"); const cur = select || sel.value;
   sel.innerHTML = ps.map(p => `<option value="${p.player}">${p.player} (${p.games})</option>`).join("") || `<option value="">no players yet</option>`;
   if (cur && ps.some(p => p.player === cur)) sel.value = cur;
-  if (sel.value) loadProfile(sel.value);
+  if (sel.value) { loadProfile(sel.value); loadRatings(sel.value); }
 }
 
 async function loadProfile(player) {
@@ -331,7 +401,8 @@ async function watchJob(id) {
 
 function showTab(name) {
   document.querySelectorAll(".tabs button").forEach(b => b.classList.toggle("on", b.dataset.tab === name));
-  for (const t of ["profile", "import", "thinking"]) $("tab-" + t).classList.toggle("hidden", t !== name);
+  if (name === "games") loadGames($("player").value);
+  for (const t of ["profile", "import", "thinking", "games", "review"]) $("tab-" + t).classList.toggle("hidden", t !== name);
 }
 
 document.querySelectorAll(".tabs button").forEach(b => b.onclick = () => showTab(b.dataset.tab));
@@ -342,7 +413,7 @@ $("import").onclick = async () => {
     watchJob(job);
   } catch (e) { $("jobstatus").textContent = e.message; }
 };
-$("player").onchange = () => loadProfile($("player").value);
+$("player").onchange = () => { loadProfile($("player").value); loadRatings($("player").value); };
 $("risk").oninput = riskLabel;
 $("commentary").onchange = async () => {
   try { localStorage.setItem("nemesis-commentary", $("commentary").value); } catch (e) {}
@@ -353,14 +424,187 @@ $("risk").onchange = async () => { if (game && !game.finished) game = await api(
 $("newgame").onclick = async () => {
   const player = $("player").value;
   if (!player) { showTab("import"); $("jobstatus").textContent = "Import a player first."; return; }
+  if (review) exitReview();
   flipped = $("color").value === "black";
   selected = null;
   $("status").textContent = "Starting…";
-  try { game = await api("/api/games", { player, color: $("color").value, risk: $("risk").value / 100, commentary: $("commentary").value }); update(); }
+  try { game = await api("/api/games", { player, color: $("color").value, risk: $("risk").value / 100, commentary: $("commentary").value, elo: +$("strength").value || null }); update(); }
   catch (e) { $("status").textContent = e.message; }
 };
 $("resign").onclick = async () => { if (game) { game = await api(`/api/games/${game.id}/resign`, {}); update(); } };
 $("flip").onclick = () => { flipped = !flipped; render(); };
+
+// ---------------------------------------------------------------------------
+// Ratings
+// ---------------------------------------------------------------------------
+const TIER_NAMES = { sound: "Sound", steering: "Steering", trapper: "Trapper", hustler: "Hustler" };
+function tierOf(risk) { return risk < .2 ? "sound" : risk < .6 ? "steering" : risk < .85 ? "trapper" : "hustler"; }
+
+async function loadRatings(player) {
+  if (!player || (game && !game.finished)) return;
+  try { renderStrip(await api(`/api/ratings/${encodeURIComponent(player)}`), tierOf($("risk").value / 100), null); }
+  catch (e) { $("strip").innerHTML = ""; }
+}
+
+function renderStrip(r, tier, elo) {
+  if (!r) return;
+  const t = r.nemesis.find(x => x.tier === tier) || r.nemesis[0];
+  const q = (p) => p ? '<span class="muted" title="Provisional: fewer than 10 rated games">?</span>' : "";
+  const last = r.history && r.history[0];
+  const delta = last && game && game.finished ? Math.round(last.after - last.before) : null;
+  const d = delta == null ? "" : ` <span class="delta ${delta >= 0 ? "up" : "down"}">${delta >= 0 ? "+" : ""}${delta}</span>`;
+  $("strip").innerHTML = `<span>You <b>${r.player.rating}</b>${q(r.player.provisional)}${d}
+      ${r.player.seeded_from_imports ? '<span class="muted">(from your imports)</span>' : ""}</span>
+    <span>Nemesis · ${TIER_NAMES[t.tier]} <b>${t.rating}</b>${q(t.provisional)}</span>
+    ${elo ? `<span class="muted">playing at ~${elo}</span>` : ""}`;
+}
+
+// ---------------------------------------------------------------------------
+// Games list and review
+// ---------------------------------------------------------------------------
+const LABEL_NAMES = { brilliant: "Brilliant", best: "Best", excellent: "Excellent", good: "Good",
+  inaccuracy: "Inaccuracy", mistake: "Mistake", miss: "Miss", blunder: "Blunder" };
+const resultText = (r) => r === 1 ? "Won" : r === 0 ? "Lost" : r === 0.5 ? "Draw" : "–";
+
+async function loadGames(player) {
+  if (!player) return;
+  const gs = await api(`/api/games/list/${encodeURIComponent(player)}`);
+  if (!gs.length) { $("games").innerHTML = `<p class="muted">No games yet.</p>`; return; }
+  $("games").innerHTML = `<table><tr><th>Date</th><th>Opponent</th><th>Result</th><th class="n">Rating</th><th></th></tr>
+    ${gs.slice(0, 100).map(g => `<tr class="gamerow"><td>${escapeHtml((g.date || "").split(" ")[0])}</td>
+      <td>${escapeHtml(g.opponent || "?")} <span class="muted">(${g.source === "nemesis" ? "here" : g.source}, ${g.color})</span></td>
+      <td>${resultText(g.result)}</td>
+      <td class="n">${g.rating_change == null ? "" : (g.rating_change >= 0 ? "+" : "") + g.rating_change}</td>
+      <td><button class="ghost" data-review="${escapeHtml(g.id)}">${g.reviewed ? "View review" : "Review"}</button></td></tr>`).join("")}</table>`;
+  document.querySelectorAll("[data-review]").forEach(b => b.onclick = () => openReview(b.dataset.review));
+}
+
+async function openReview(id) {
+  showTab("games");
+  const path = `/api/review/${encodeURIComponent(id)}`;
+  const cached = await api(path);
+  if (cached.ready !== false) return enterReview(cached);
+  const { job } = await api(path, {});
+  const tick = async () => {
+    const j = await api(`/api/jobs/${job}`);
+    $("rv-bar").style.width = (100 * j.progress) + "%";
+    $("rv-status").textContent = j.status === "error" ? `Error: ${j.message}` : j.message;
+    if (j.status === "running") setTimeout(tick, 700);
+    else if (j.status === "done") enterReview(await api(path));
+  };
+  tick();
+}
+
+function enterReview(data) {
+  review = data; rply = -1; selected = null;
+  flipped = data.game.you === "black";
+  $("playbar").classList.add("hidden"); $("reviewbar").classList.remove("hidden");
+  $("reviewtab").classList.remove("hidden");
+  renderReviewPanel(); goto(data.moves.length - 1); showTab("review");
+}
+
+function exitReview() {
+  review = null;
+  $("playbar").classList.remove("hidden"); $("reviewbar").classList.add("hidden");
+  $("reviewtab").classList.add("hidden");
+  flipped = game ? game.human === "black" : false;
+  render(); showTab("profile");
+}
+
+function goto(ply) {
+  if (!review) return;
+  rply = Math.max(-1, Math.min(review.moves.length - 1, ply));
+  render(); drawGraph();
+  document.querySelectorAll("#rv-moves button").forEach(b => b.classList.toggle("on", +b.dataset.ply === rply));
+  const on = document.querySelector("#rv-moves button.on");
+  if (on) on.scrollIntoView({ block: "nearest" });
+  const m = review.moves[rply];
+  if (!m) { $("rv-now").innerHTML = `<span class="muted">Start position. Use ◀ ▶ or the arrow keys.</span>`; return; }
+  const who = m.side === "you" ? "You" : escapeHtml(review.game.opponent);
+  const better = ["best", "brilliant"].includes(m.label) ? "" :
+    `<br><span class="muted">Best was ${m.best_san} (${escapeHtml(m.best_text)}).</span>`;
+  $("rv-now").innerHTML = `<b>${m.number}${m.white ? "." : "..."} ${m.san}</b> · ${who} ·
+    <span class="t-${m.label}">${LABEL_NAMES[m.label]}</span>${m.loss > 10 ? ` <span class="muted">(−${(m.loss / 100).toFixed(1)})</span>` : ""}${better}`;
+}
+
+function drawGraph() {
+  const svg = $("graph"), n = review.graph.length, W = 1000, H = 100;
+  if (!n) { svg.innerHTML = ""; return; }
+  const x = (i) => n === 1 ? W / 2 : (i / (n - 1)) * W, y = (v) => H - v;
+  const pts = review.graph.map((v, i) => `${x(i)},${y(v)}`).join(" ");
+  const dots = review.moves.map((m, i) => ["mistake", "miss", "blunder", "brilliant"].includes(m.label)
+    ? `<circle cx="${x(i)}" cy="${y(review.graph[i])}" r="9" class="b-${m.label}" style="fill:var(--l-${m.label})"/>` : "").join("");
+  const cur = rply >= 0 ? `<line x1="${x(rply)}" x2="${x(rply)}" y1="0" y2="${H}" stroke="var(--accent)" stroke-width="3"/>` : "";
+  svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+  svg.innerHTML = `<rect width="${W}" height="${H}" fill="var(--graph-black)"/>
+    <polygon points="0,${H} ${pts} ${W},${H}" fill="var(--graph-white)"/>
+    <line x1="0" x2="${W}" y1="${H / 2}" y2="${H / 2}" stroke="var(--muted)" stroke-dasharray="6 6" stroke-width="1"/>
+    ${cur}${dots}`;
+}
+$("graph").onclick = (e) => {
+  if (!review || !review.graph.length) return;
+  const r = $("graph").getBoundingClientRect();
+  goto(Math.round(((e.clientX - r.left) / r.width) * (review.graph.length - 1)));
+};
+
+function renderReviewPanel() {
+  const r = review, g = r.game, you = "you", opp = escapeHtml(g.opponent);
+  $("rv-moves").innerHTML = r.moves.map((m, i) => (m.white || i === 0 ? `<span class="n">${m.number}.</span>` : "") +
+    (!m.white && i === 0 ? "<span></span>" : "") +
+    `<button data-ply="${i}"><span class="lab b-${m.label}"></span>${m.san}</button>`).join("");
+  document.querySelectorAll("#rv-moves button").forEach(b => b.onclick = () => goto(+b.dataset.ply));
+  const acc = (v) => v == null ? "–" : v.toFixed(1);
+  const counts = Object.keys(LABEL_NAMES).map(l => `<tr><td><span class="lab b-${l}"></span>${LABEL_NAMES[l]}</td>
+      <td class="n">${r.counts.you[l] || 0}</td><td class="n">${r.counts.opponent[l] || 0}</td></tr>`).join("");
+  const rt = r.ratings ? `<p>Rating: you ${r.ratings.you.before} → <b>${r.ratings.you.after}</b>
+      (${r.ratings.you.change >= 0 ? "+" : ""}${r.ratings.you.change}) ·
+      Nemesis (${TIER_NAMES[r.ratings.nemesis.tier]}) ${r.ratings.nemesis.before} → ${r.ratings.nemesis.after}</p>` : "";
+  const moments = r.key_moments.map(k => `<button class="moment" data-ply="${k.ply}"><span class="lab b-${k.label}"></span>${escapeHtml(k.text)}</button>`).join("")
+    || `<p class="muted">No big swings. A clean game.</p>`;
+  let nem = "";
+  if (r.nemesis) {
+    const n = r.nemesis;
+    nem = `<h3>Nemesis's side</h3>
+      <p>Traps set: <b>${n.traps_set}</b> · you fell for <b>${n.traps_sprung}</b>.</p>
+      ${n.traps.map(t => `<button class="moment" data-ply="${t.ply}"><span class="lab b-${t.sprung ? "blunder" : "best"}"></span>${escapeHtml(t.text)}</button>`).join("")}
+      ${n.predictions ? `<p>Nemesis predicted your exact move <b>${n.predicted_top} of ${n.predictions}</b> times (${pct(n.predictability)}).
+        ${n.most_surprising ? `Your most surprising move was ${n.most_surprising.san} (it gave that ${pct(n.most_surprising.prob)}).` : ""}
+        ${n.most_predictable ? `Your most predictable was ${n.most_predictable.san} (${pct(n.most_predictable.prob)}).` : ""}</p>` : ""}
+      ${n.elo ? `<p class="muted">Nemesis played at about ${n.elo} strength${n.slips ? `, with ${n.slips} deliberate slip${n.slips > 1 ? "s" : ""}` : ""}.</p>` : ""}`;
+  }
+  $("review").innerHTML = `<h2>Game review</h2>
+    <p>${g.you === "white" ? "You" : opp} vs ${g.you === "white" ? opp : "you"} · ${resultText(g.result)}
+      ${g.opening ? `· <span class="muted">${escapeHtml(g.opening)}</span>` : ""}</p>
+    <div class="accs"><div class="acc"><span class="muted">Your accuracy</span><big>${acc(r.accuracy.you)}</big></div>
+      <div class="acc"><span class="muted">${opp}'s accuracy</span><big>${acc(r.accuracy.opponent)}</big></div></div>
+    ${rt}
+    <h3>Key moments</h3>${moments}
+    ${nem}
+    <h3>Move quality</h3>
+    <table><tr><th></th><th class="n">You</th><th class="n">${opp}</th></tr>${counts}</table>`;
+  document.querySelectorAll("#review .moment").forEach(b => b.onclick = () => goto(+b.dataset.ply));
+}
+
+$("rv-first").onclick = () => goto(-1);
+$("rv-prev").onclick = () => goto(rply - 1);
+$("rv-next").onclick = () => goto(rply + 1);
+$("rv-last").onclick = () => goto(review.moves.length - 1);
+$("rv-flip").onclick = () => { flipped = !flipped; render(); };
+$("rv-exit").onclick = exitReview;
+$("reviewgame").onclick = () => game && game.game_id && openReview(game.game_id);
+document.addEventListener("keydown", (e) => {
+  if (!review || ["INPUT", "SELECT", "TEXTAREA"].includes(document.activeElement.tagName)) return;
+  if (e.key === "ArrowLeft") { goto(rply - 1); e.preventDefault(); }
+  if (e.key === "ArrowRight") { goto(rply + 1); e.preventDefault(); }
+});
+
+for (let e = 800; e <= 2400; e += 100) $("strength").insertAdjacentHTML("beforeend", `<option value="${e}">${e}${e === 2400 ? " (full strength)" : ""}</option>`);
+try { const saved = localStorage.getItem("nemesis-strength"); if (saved) $("strength").value = saved; } catch (e) {}
+$("strength").onchange = async () => {
+  try { localStorage.setItem("nemesis-strength", $("strength").value); } catch (e) {}
+  if (game && !game.finished) { game = await api(`/api/games/${game.id}/elo`, { elo: +$("strength").value || null }); update(); }
+};
+$("risk").addEventListener("change", () => { if (!game || game.finished) loadRatings($("player").value); });
 
 riskLabel(); render(); loadPlayers();
 </script>

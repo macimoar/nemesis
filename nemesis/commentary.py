@@ -139,7 +139,11 @@ def before(board: chess.Board, decision: "Decision", mode: str = XRAY) -> list[s
     top = max(decision.candidates, key=lambda x: x.cp)
     suits = c.exploit > c.objective + 0.03
     gap = top.cp - c.cp
-    if top.uci == c.uci or gap <= 0:
+    if decision.elo and decision.top_scored != c.uci and gap > 30:
+        # Honest about strength-limited slips rather than dressing them up as cunning.
+        why = (f"Not my strongest option: {top.san} was better by {_pawns(gap)}. "
+               f"I'm playing at about {decision.elo:.0f} strength, so I don't always find the best move.")
+    elif top.uci == c.uci or gap <= 0:
         why = "It's the engine's top choice" + (", and it suits how you play." if suits else ".")
     elif gap <= 30:
         why = (f"It's as good as the engine's top choice. {top.san} is {gap / 100:.2f} pawns better, "

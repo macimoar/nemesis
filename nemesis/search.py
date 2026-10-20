@@ -7,14 +7,18 @@ Stockfish evals converted to expected score.
 The risk dial r in [0, 1] controls two things:
   * window(r): how far below Stockfish's best a root move may be (15cp at r=0, 300cp at r=1)
   * lam(r):    the blend between objective expected score and expected score against you
+
+With a strength target (Elo), the final choice is sampled instead (see strength.py).
 """
 
 from __future__ import annotations
 
+import random
 from dataclasses import dataclass, field
 
 import chess
 
+from nemesis import strength
 from nemesis.analysis.stockfish import Analyzer, impute_losses, terminal_cp, win_prob
 from nemesis.features import STYLE_TEXT, Context, position_features
 from nemesis.profile.move_model import MoveModel
@@ -57,6 +61,9 @@ class Decision:
     move: chess.Move
     candidates: list[Candidate]
     lines: list[str] = field(default_factory=list)   # filled in by the engine's commentary
+    elo: float | None = None      # strength target it played at (None = unlimited)
+    top_scored: str = ""          # the move the unlimited search would have played
+    lapse: bool = False           # a deliberate human-style slip at this strength
 
     @property
     def best(self) -> Candidate:
@@ -67,10 +74,23 @@ class Decision:
         """The reply Nemesis is hoping for: likely enough, and costly for the human."""
         return next((r for r in self.best.replies if r.loss >= 100 and r.prob >= 0.08), None)
 
+    def annotation(self, ply: int, risk: float) -> dict:
+        """What Nemesis was thinking at this move, saved with the game for its review."""
+        trap = self.trap
+        return {
+            "ply": ply, "move": self.move.uci(), "risk": risk, "elo": self.elo,
+            "best_effort": self.top_scored == self.move.uci(), "lapse": self.lapse,
+            "trap": {"uci": trap.uci, "prob": round(trap.prob, 3), "loss": trap.loss,
+                     "reasons": trap.reasons} if trap else None,
+            "probs": {r.uci: round(r.prob, 3) for r in self.best.replies if r.prob >= 0.01},
+            "top": self.best.replies[0].uci if self.best.replies else None,
+        }
+
 
 class Searcher:
     def __init__(self, analyzer: Analyzer, model: MoveModel, tree: OpeningTree | None = None,
-                 risk: float = 0.5, multipv: int = 6, root_multipv: int = 8, deep: bool = False):
+                 risk: float = 0.5, multipv: int = 6, root_multipv: int = 8, deep: bool = False,
+                 elo: float | None = None, rng: random.Random | None = None):
         self.analyzer = analyzer
         self.model = model
         self.tree = tree
@@ -78,6 +98,8 @@ class Searcher:
         self.multipv = multipv
         self.root_multipv = root_multipv
         self.deep = deep
+        self.elo = elo if strength.limited(elo) else None
+        self.rng = rng or random.Random()
 
     # -- the human's turn ---------------------------------------------------
     def human_replies(self, board: chess.Board, clock: float | None = None) -> list[Reply]:
@@ -154,11 +176,14 @@ class Searcher:
 
     # -- Nemesis's turn (root) ----------------------------------------------
     def choose(self, board: chess.Board, human_clock: float | None = None) -> Decision:
-        lines = self.analyzer.lines(board, multipv=self.root_multipv)
+        multipv = 12 if self.elo else self.root_multipv
+        lines = self.analyzer.lines(board, multipv=multipv)
         if not lines:
             raise ValueError("no legal moves")
         best = max(lines.values())
         window, lam = window_cp(self.risk, best), blend(self.risk)
+        if self.elo:
+            window = max(window, strength.search_window(self.elo))
         depth = 2 if self.deep else 1
         cands: list[Candidate] = []
         for u, cp in lines.items():
@@ -177,5 +202,10 @@ class Searcher:
                                    score=(1 - lam) * obj + lam * exploit, replies=replies, book=book))
         # Expected score saturates near 1 in won positions, so the raw eval breaks near-ties.
         cands.sort(key=lambda c: (-round(c.score, 3), -c.cp))
-        return Decision(move=chess.Move.from_uci(cands[0].uci), candidates=cands)
+        top_scored, lapse = cands[0].uci, False
+        if self.elo:
+            i, lapse = strength.pick([best - c.cp for c in cands], [c.score for c in cands], self.elo, self.rng)
+            cands.insert(0, cands.pop(i))  # the move actually played always comes first
+        return Decision(move=chess.Move.from_uci(cands[0].uci), candidates=cands, elo=self.elo,
+                        top_scored=top_scored, lapse=lapse)
 

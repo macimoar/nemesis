@@ -1,4 +1,4 @@
-"""Command line: nemesis import | train | profile | play | uci | serve."""
+"""Command line: nemesis import | train | profile | play | games | review | ratings | uci | serve."""
 
 from __future__ import annotations
 
@@ -91,7 +91,9 @@ def cmd_play(args: argparse.Namespace) -> None:
 
     store = Store(args.db)
     nem = Nemesis(store, args.username, risk=args.risk, depth=args.depth, deep=args.deep,
-                  mode=args.commentary)
+                  mode=args.commentary, elo=args.elo or None)
+    print(f"Nemesis plays at about {nem.target_elo():.0f}.")
+    annotations: list[dict] = []
     human = chess.WHITE if args.color == "white" else chess.BLACK
     board = chess.Board()
     played: list[str] = []
@@ -118,6 +120,7 @@ def cmd_play(args: argparse.Namespace) -> None:
             else:
                 decision = nem.choose(board)
                 move = decision.move
+                annotations.append(decision.annotation(len(board.move_stack), args.risk))
                 print(f"\nNemesis plays {board.san(move)}")
                 say(decision.lines)
             played.append(move.uci())
@@ -126,10 +129,75 @@ def cmd_play(args: argparse.Namespace) -> None:
         if result == "*":
             result = "0-1" if human == chess.WHITE else "1-0"
         print("result:", result)
-        record_game(store, args.username, human, played, result=result)
-        print("game saved; run `nemesis train` to learn from it")
+        gid = record_game(store, args.username, human, played, result=result, risk=args.risk,
+                          annotations=annotations)
+        print(f"game saved as {gid}; run `nemesis train` to learn from it, `nemesis review` to review it")
+        for entity, (before, after) in store.rating_change(gid).items():
+            who = "you" if entity.startswith("player:") else "Nemesis"
+            print(f"  rating ({who}): {before:.0f} -> {after:.0f} ({after - before:+.0f})")
     finally:
         nem.close()
+
+
+def cmd_games(args: argparse.Namespace) -> None:
+    store = Store(args.db)
+    for g in reversed(store.games(args.username)[-args.limit:]):
+        opp = "Nemesis" if g.source == "nemesis" else g.opponent
+        res = {1.0: "won", 0.0: "lost", 0.5: "draw"}.get(g.result, "?")
+        print(f"{g.id:<28} {(g.played_at or '')[:10]:<10} vs {opp:<20} {res:<5} {g.opening or ''}")
+
+
+def cmd_ratings(args: argparse.Namespace) -> None:
+    from nemesis import ratings
+    r = ratings.summary(Store(args.db), args.username)
+    q = lambda p: "?" if p else ""
+    me = r["player"]
+    print(f"You: {me['rating']}{q(me['provisional'])}"
+          + ("  (seeded from your imported games)" if me["seeded_from_imports"] else f"  ({me['games']} rated game{'' if me['games'] == 1 else 's'})"))
+    for t in r["nemesis"]:
+        print(f"  Nemesis {t['label']:<9} {t['rating']}{q(t['provisional'])}  "
+              f"({t['games']} game{'' if t['games'] == 1 else 's'})")
+    for h in r["history"][:10]:
+        print(f"  {(h['played_at'] or '')[:10]}  {h['before']:.0f} -> {h['after']:.0f} ({h['after'] - h['before']:+.0f})")
+
+
+def cmd_review(args: argparse.Namespace) -> None:
+    from nemesis.analysis.stockfish import StockfishAnalyzer
+    from nemesis.review import LABELS, get_review
+
+    store = Store(args.db)
+    games = store.games(args.username)
+    if not games:
+        sys.exit(f"no games for {args.username}")
+    gid = args.game or games[-1].id
+    with StockfishAnalyzer(store, depth=args.depth) as analyzer:
+        r = get_review(store, analyzer, gid)
+    g = r["game"]
+    res = {1.0: "you won", 0.0: "you lost", 0.5: "draw"}.get(g["result"], "unfinished")
+    print(f"Review of {gid}: you ({g['you']}) vs {g['opponent']}, {res}")
+    print(f"  Accuracy: you {r['accuracy']['you']}  {g['opponent']} {r['accuracy']['opponent']}")
+    for side, name in (("you", "You"), ("opponent", g["opponent"])):
+        c = r["counts"][side]
+        print(f"  {name:<10} " + ", ".join(f"{c[l]} {l}" for l in LABELS if c.get(l)))
+    if r["ratings"]:
+        y = r["ratings"]["you"]
+        print(f"  Rating: {y['before']} -> {y['after']} ({y['change']:+})")
+    print("\nKey moments:")
+    for k in r["key_moments"] or [{"text": "No big swings. A clean game."}]:
+        print("  - " + k["text"])
+    n = r["nemesis"]
+    if n:
+        plural = "" if n["traps_set"] == 1 else "s"
+        print(f"\nNemesis's side: {n['traps_set']} trap{plural} set, you fell for {n['traps_sprung']}.")
+        for t in n["traps"]:
+            print("  - " + t["text"])
+        if n["predictions"]:
+            print(f"  It predicted your exact move {n['predicted_top']} of {n['predictions']} times.")
+    print("\nMoves:")
+    for m in r["moves"]:
+        num = f"{m['number']}{'.' if m['white'] else '...'}"
+        note = "" if m["label"] in ("best", "brilliant", "excellent", "good") else f"  (best: {m['best_san']})"
+        print(f"  {num:<6} {m['san']:<8} {m['label']}{note}")
 
 
 def say(lines: list[str]) -> None:
@@ -179,9 +247,26 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument("--risk", type=float, default=0.5)
     p.add_argument("--depth", type=int, default=10)
     p.add_argument("--deep", action="store_true")
+    p.add_argument("--elo", type=int, default=0, help="Nemesis's strength (default: your rating + 50)")
     p.add_argument("--commentary", choices=["xray", "poker"], default="xray",
                    help="xray: full breakdown, no spoilers; poker: in-character one-liners")
     p.set_defaults(func=cmd_play)
+
+    p = sub.add_parser("games", help="list a player's games")
+    p.add_argument("username")
+    p.add_argument("--limit", type=int, default=30)
+    p.set_defaults(func=cmd_games)
+
+    p = sub.add_parser("review", help="review a game: accuracy, mistakes, key moments")
+    p.add_argument("username")
+    p.add_argument("--game", help="game id (see `nemesis games`); default: the latest")
+    p.add_argument("--last", action="store_true", help="review the latest game (the default)")
+    p.add_argument("--depth", type=int, default=10)
+    p.set_defaults(func=cmd_review)
+
+    p = sub.add_parser("ratings", help="your rating and Nemesis's, per risk tier")
+    p.add_argument("username")
+    p.set_defaults(func=cmd_ratings)
 
     p = sub.add_parser("uci", help="speak UCI on stdin/stdout")
     p.set_defaults(func=cmd_uci)

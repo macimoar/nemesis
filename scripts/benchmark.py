@@ -16,6 +16,7 @@ import chess
 import chess.engine
 
 from nemesis.analysis.stockfish import StockfishAnalyzer, find_stockfish
+from nemesis import strength
 from nemesis.engine import Nemesis
 from nemesis.store import Store
 from simulate import pick
@@ -50,7 +51,8 @@ def main() -> None:
 
     store = Store(args.db)
     analyzer = StockfishAnalyzer(store, depth=args.depth)
-    nem = Nemesis(store, args.player, risk=args.risk, depth=args.depth, analyzer=analyzer)
+    # Full strength: this compares exploitation with plain Stockfish at equal depth.
+    nem = Nemesis(store, args.player, risk=args.risk, depth=args.depth, analyzer=analyzer, elo=strength.MAX_ELO)
     plain = analyzer.engine
     contenders = {
         "stockfish": lambda b: plain.play(b, chess.engine.Limit(depth=args.depth)).move,

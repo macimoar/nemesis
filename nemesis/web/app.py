@@ -15,11 +15,12 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from nemesis.analysis.stockfish import StockfishAnalyzer
-from nemesis import commentary
+from nemesis import commentary, ratings
 from nemesis.engine import Nemesis
 from nemesis.search import Decision
 from nemesis.features import STYLE_TEXT
 from nemesis.learn import record_game, train
+from nemesis.review import cached_review, rating_changes, review_game
 from nemesis.store import DEFAULT_DB, Store
 
 STATIC = Path(__file__).parent / "static"
@@ -38,6 +39,7 @@ class NewGameReq(BaseModel):
     risk: float = 0.5
     deep: bool = False
     commentary: str = "xray"  # xray | poker
+    elo: int | None = None    # Nemesis's strength; None/0 = "match me" (your rating + 50)
 
 
 class MoveReq(BaseModel):
@@ -50,6 +52,10 @@ class RiskReq(BaseModel):
 
 class CommentaryReq(BaseModel):
     mode: str
+
+
+class EloReq(BaseModel):
+    elo: int | None = None
 
 
 @dataclass
@@ -73,6 +79,8 @@ class Game:
     finished: bool = False
     result: str | None = None
     pending: Decision | None = None   # Nemesis's last decision, kept to react to the human's reply
+    annotations: list[dict] = field(default_factory=list)   # what Nemesis was thinking, for review
+    game_id: str | None = None        # id in the store once finished
 
 
 def create_app(db: str | Path = DEFAULT_DB, depth: int = 10) -> FastAPI:
@@ -120,14 +128,26 @@ def create_app(db: str | Path = DEFAULT_DB, depth: int = 10) -> FastAPI:
             "last": g.board.peek().uci() if g.board.move_stack else None,
             "legal": legal, "log": g.log, "finished": g.finished, "result": g.result,
             "risk": g.engine.risk, "check": g.board.is_check(), "commentary": g.engine.mode,
+            "tier": ratings.tier(g.engine.risk), "elo": round(g.engine.target_elo()),
+            "fixed_elo": g.engine.fixed_elo, "ratings": ratings.summary(store, g.player),
+            "game_id": g.game_id,
         }
 
     def finish(g: Game, result: str) -> None:
         g.finished, g.result = True, result
-        record_game(store, g.player, g.human, [m.uci() for m in g.board.move_stack], result=result)
+        # Rate against the tier Nemesis mostly played at (the risk can change mid-game).
+        risks = [a["risk"] for a in g.annotations] or [g.engine.risk]
+        g.game_id = record_game(store, g.player, g.human, [m.uci() for m in g.board.move_stack],
+                                result=result, risk=sum(risks) / len(risks), annotations=g.annotations)
         job = Job(id=uuid.uuid4().hex[:8], kind="learn", player=g.player)
         jobs[job.id] = job
-        g.log.append({"who": "nemesis", "kind": "info", "lines": [f"Game over ({result}). I'm studying this one."]})
+        lines = [f"Game over ({result}). I'm studying this one."]
+        change = store.rating_change(g.game_id) if g.game_id else {}
+        for entity, (before, after) in change.items():
+            name = "Your rating" if entity.startswith("player:") else \
+                f"My rating ({ratings.TIER_LABEL[entity.rsplit(':', 1)[-1]]})"
+            lines.append(f"{name}: {before:.0f} → {after:.0f} ({after - before:+.0f}).")
+        g.log.append({"who": "nemesis", "kind": "info", "lines": lines})
         run_job(job, train_job)
 
     def nemesis_turn(g: Game) -> None:
@@ -136,6 +156,7 @@ def create_app(db: str | Path = DEFAULT_DB, depth: int = 10) -> FastAPI:
             return
         decision = g.engine.choose(g.board)
         san = g.board.san(decision.move)
+        g.annotations.append(decision.annotation(len(g.board.move_stack), g.engine.risk))
         g.board.push(decision.move)
         g.pending = decision
         entry = {"who": "nemesis", "kind": "move", "san": san, "lines": decision.lines}
@@ -211,7 +232,7 @@ def create_app(db: str | Path = DEFAULT_DB, depth: int = 10) -> FastAPI:
     @app.post("/api/games")
     def new_game(req: NewGameReq) -> dict:
         engine = Nemesis(store, req.player, risk=req.risk, deep=req.deep, analyzer=analyzer,
-                         mode=req.commentary)
+                         mode=req.commentary, elo=req.elo or None)
         human = chess.WHITE if req.color == "white" else chess.BLACK
         g = Game(id=uuid.uuid4().hex[:10], player=req.player.lower(), human=human, engine=engine)
         games[g.id] = g
@@ -260,11 +281,62 @@ def create_app(db: str | Path = DEFAULT_DB, depth: int = 10) -> FastAPI:
         g.engine.mode = commentary.normalise_mode(req.mode)
         return state(g)
 
+    @app.post("/api/games/{game_id}/elo")
+    def set_elo(game_id: str, req: EloReq) -> dict:
+        g = get_game(game_id)
+        g.engine.fixed_elo = req.elo or None
+        return state(g)
+
     @app.post("/api/games/{game_id}/resign")
     def resign(game_id: str) -> dict:
         g = get_game(game_id)
         if not g.finished:
             finish(g, "0-1" if g.human == chess.WHITE else "1-0")
         return state(g)
+
+    @app.get("/api/ratings/{player}")
+    def player_ratings(player: str) -> dict:
+        return ratings.summary(store, player.lower())
+
+    @app.get("/api/games/list/{player}")
+    def list_games(player: str) -> list[dict]:
+        out = []
+        for gr in reversed(store.games(player.lower())):
+            change = store.rating_change(gr.id).get(ratings.player_entity(player))
+            out.append({
+                "id": gr.id, "date": gr.played_at, "source": gr.source, "opening": gr.opening,
+                "opponent": "Nemesis" if gr.source == "nemesis" else gr.opponent,
+                "color": "white" if gr.color else "black", "result": gr.result,
+                "rating_change": round(change[1] - change[0]) if change else None,
+                "reviewed": cached_review(store, gr.id, analyzer.depth) is not None,
+            })
+        return out
+
+    @app.post("/api/review/{game_id:path}")
+    def start_review(game_id: str) -> dict:
+        game = store.game(game_id)
+        if game is None:
+            raise HTTPException(404, "no such game")
+        job = Job(id=uuid.uuid4().hex[:8], kind="review", player=game.player)
+        jobs[job.id] = job
+
+        def work(job: Job) -> None:
+            def progress(done: int, total: int) -> None:
+                job.progress = done / max(total, 1)
+                job.message = f"analysing move {done}/{total}"
+            if cached_review(store, game_id, analyzer.depth) is None:
+                review_game(store, analyzer, game_id, progress=progress)
+            job.message = "review ready"
+
+        run_job(job, work)
+        return {"job": job.id}
+
+    @app.get("/api/review/{game_id:path}")
+    def get_review(game_id: str) -> dict:
+        rev = cached_review(store, game_id, analyzer.depth)
+        if rev is None:
+            return {"ready": False}
+        rev["ratings"] = rating_changes(store, game_id)
+        return rev
 
     return app

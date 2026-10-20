@@ -15,7 +15,21 @@ class MaterialAnalyzer:
                 total += VALUE[p.piece_type] * (1 if p.color == color else -1)
         return total * 100
 
+    def __init__(self):
+        self._cache = {}
+
     def lines(self, board, multipv=6, extra=()):
+        key = board.fen()
+        if key not in self._cache:
+            self._cache[key] = self._score_all(board)
+        scores = self._cache[key]
+        top = dict(sorted(scores.items(), key=lambda kv: -kv[1])[:multipv])
+        for u in extra:
+            if u in scores:
+                top[u] = scores[u]
+        return top
+
+    def _score_all(self, board):
         me = board.turn
         scores = {}
         for move in board.legal_moves:
@@ -32,11 +46,7 @@ class MaterialAnalyzer:
                 worst = self._material(board, me) if worst is None else worst
             board.pop()
             scores[move.uci()] = worst
-        top = dict(sorted(scores.items(), key=lambda kv: -kv[1])[:multipv])
-        for u in extra:
-            if u in scores:
-                top[u] = scores[u]
-        return top
+        return scores
 
 
 @pytest.fixture
