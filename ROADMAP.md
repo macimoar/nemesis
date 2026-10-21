@@ -34,7 +34,7 @@ Nemesis knows your weaknesses, so it can drill them.
 - ✅ **Puzzles from your own mistakes.** Positions from your games where you missed a
   fork, ignored a threat or hung a piece, replayed as "find the move" exercises,
   hardest-for-you first.
-- **Opening repair.** For the openings where you score worst, play through the
+- ✅ **Opening repair.** For the openings where you score worst, play through the
   lines where you usually go wrong until you stop going wrong.
 - **Doppelgänger mode.** The model that predicts your moves can also play like any
   imported player. Import a friend's or rival's games and practise against their style.

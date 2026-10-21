@@ -91,8 +91,8 @@
   td, th { text-align: left; padding: 4px 6px; border-bottom: 1px solid var(--line); }
   td.n, th.n { text-align: right; font-variant-numeric: tabular-nums; }
   .muted { color: var(--muted); }
-  .tabs { display: flex; gap: 6px; margin-bottom: 12px; }
-  .tabs button { background: transparent; color: var(--muted); border: 1px solid var(--line); }
+  .tabs { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
+  .tabs button { background: transparent; color: var(--muted); border: 1px solid var(--line); padding: 7px 11px; white-space: nowrap; }
   .tabs button.on { color: var(--ink); border-color: var(--accent); }
   .hidden { display: none !important; }   /* always wins over a component's own display */
   .progress { height: 4px; background: var(--line); border-radius: 2px; overflow: hidden; margin-top: 8px; }
@@ -118,6 +118,7 @@
               color: var(--ink); text-decoration: none; font: inherit; }
   a.btnlink:hover { border-color: var(--ink); }
   a.small { font-size: 13px; color: var(--muted); margin-right: 8px; }
+  button.small { padding: 4px 10px; font-size: 13px; }
   .strip { display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: baseline; margin-top: 12px; font-size: 14px; }
   .strip b { font-variant-numeric: tabular-nums; }
   .strip .delta.up { color: var(--good); } .strip .delta.down { color: var(--accent); }
@@ -270,10 +271,11 @@
   <section class="panel">
     <div class="tabs">
       <button data-tab="profile" class="on">Profile</button>
-      <button data-tab="import">Import games</button>
-      <button data-tab="thinking">Nemesis's thinking</button>
+      <button data-tab="import">Import</button>
+      <button data-tab="thinking">Thinking</button>
       <button data-tab="games">Games</button>
       <button data-tab="puzzles">Puzzles</button>
+      <button data-tab="repairs">Openings</button>
       <button data-tab="review" class="hidden" id="reviewtab">Review</button>
     </div>
 
@@ -303,6 +305,10 @@
 
     <div id="tab-puzzles" class="hidden">
       <div id="puzzles"><p class="muted">Loading…</p></div>
+    </div>
+
+    <div id="tab-repairs" class="hidden">
+      <div id="repairs"><p class="muted">Loading…</p></div>
     </div>
 
     <div id="tab-review" class="hidden">
@@ -403,8 +409,8 @@ function render() {
 // Moving: click a piece then a square, or drag it. Promotions ask which piece.
 // ---------------------------------------------------------------------------
 const canMove = () => !review && !pendingMove && !promoOpen &&
-  (puz ? !puz.result : game && !game.finished && game.turn === game.human);
-const movesFrom = (sq) => (puz ? puz.result ? [] : puz.p.legal[sq] : game && game.legal[sq]) || [];
+  (puz ? !puz.result && !puz.intro : game && !game.finished && game.turn === game.human);
+const movesFrom = (sq) => (puz ? puz.result || puz.intro ? [] : puz.p.legal[sq] : game && game.legal[sq]) || [];
 const movesTo = (from, to) => movesFrom(from).filter(u => u.slice(2, 4) === to);
 let drag = null, promoOpen = false;
 
@@ -713,7 +719,8 @@ function showTab(name) {
   document.querySelectorAll(".tabs button").forEach(b => b.classList.toggle("on", b.dataset.tab === name));
   if (name === "games") loadGames($("player").value);
   if (name === "puzzles" && !puz) loadPuzzles($("player").value);
-  for (const t of ["profile", "import", "thinking", "games", "puzzles", "review"]) $("tab-" + t).classList.toggle("hidden", t !== name);
+  if (name === "repairs" && !puz) loadRepairs($("player").value);
+  for (const t of ["profile", "import", "thinking", "games", "puzzles", "repairs", "review"]) $("tab-" + t).classList.toggle("hidden", t !== name);
 }
 
 document.querySelectorAll(".tabs button").forEach(b => b.onclick = () => showTab(b.dataset.tab));
@@ -728,6 +735,7 @@ $("player").onchange = () => {
   loadProfile($("player").value); loadRatings($("player").value);
   if (puz) exitPuzzles();
   else if (!$("tab-puzzles").classList.contains("hidden")) loadPuzzles($("player").value);
+  else if (!$("tab-repairs").classList.contains("hidden")) loadRepairs($("player").value);
 };
 $("risk").oninput = riskLabel;
 $("commentary").onchange = async () => {
@@ -954,26 +962,38 @@ async function loadPuzzles(player) {
     ${s.first_try != null ? stat("Solved first try", s.first_try + "%") : ""}
     <h3>Themes</h3>${themes}
     <div class="row"><button id="pz-start">${s.new + s.missed ? "Start" : "Practise again"}</button></div>`;
-  $("pz-start").onclick = () => nextPuzzle();
+  $("pz-start").onclick = () => nextDrill("puzzles");
 }
 
-async function nextPuzzle(skip) {
+// Both puzzles and opening repair use the board the same way: find a move, then see the line.
+const DRILLS = {
+  puzzles: { next: (pl) => `/api/puzzles/${pl}/next`, key: "puzzle", load: () => loadPuzzles($("player").value),
+             attempt: (d, uci) => api(`/api/puzzle/${encodeURIComponent(d.p.id)}/attempt`, { uci, hinted: pzHinted }) },
+  repairs: { next: (pl) => `/api/repairs/${pl}/next`, key: "spot", load: () => loadRepairs($("player").value),
+             attempt: (d, uci) => api(`/api/repairs/${encodeURIComponent($("player").value)}/attempt`, { id: d.p.id, uci }) },
+};
+
+async function nextDrill(kind, skip, opening) {
   const player = $("player").value;
   if (game && game.clock && !game.finished) {   // your clock would keep running
-    $("puzzles").insertAdjacentHTML("beforeend", `<p class="err">Finish or resign your timed game first.</p>`);
+    $(kind).insertAdjacentHTML("beforeend", `<p class="err">Finish or resign your timed game first.</p>`);
     return;
   }
-  const q = skip ? `?skip=${encodeURIComponent(skip)}` : "";
-  const { puzzle } = await api(`/api/puzzles/${encodeURIComponent(player)}/next${q}`);
-  if (!puzzle) return loadPuzzles(player);
+  const params = new URLSearchParams();
+  if (skip) params.set("skip", skip);
+  if (opening) params.set("opening", opening);
+  const data = await api(`${DRILLS[kind].next(encodeURIComponent(player))}?${params}`);
+  const puzzle = data[DRILLS[kind].key];
+  if (!puzzle) return puz ? exitPuzzles() : DRILLS[kind].load();   // nothing left: back to the list
   if (review) exitReview();
   clearTimeout(pzTimer);
-  puz = { p: puzzle, result: null, shown: puzzle.fen, last: null };
+  puz = { kind, opening, p: puzzle, result: null, shown: puzzle.fen, last: null };
   pzHinted = false; selected = null; flipped = puzzle.color === "black";
   $("playbar").classList.add("hidden"); $("reviewbar").classList.add("hidden"); $("puzzlebar").classList.remove("hidden");
   ["clock-top", "clock-bottom"].forEach(id => $(id).classList.add("hidden"));
   $("pz-hint").classList.remove("hidden"); $("pz-giveup").classList.remove("hidden");
   $("pz-next").classList.add("hidden"); $("pz-replay").classList.add("hidden");
+  if (kind === "repairs") return startRepair(puzzle);
   const from = puzzle.opponent ? ` against ${escapeHtml(puzzle.opponent)}` : "";
   const when = puzzle.date ? ` on ${escapeHtml(puzzle.date)}` : "";
   const again = puzzle.status === "missed" ? " You missed this one before." : puzzle.status === "solved" ? " Review: you've solved this one." : "";
@@ -988,7 +1008,7 @@ async function nextPuzzle(skip) {
 async function answerPuzzle(uci) {
   pendingMove = null;
   puz.last = uci;
-  const res = await api(`/api/puzzle/${encodeURIComponent(puz.p.id)}/attempt`, { uci, hinted: pzHinted });
+  const res = await DRILLS[puz.kind].attempt(puz, uci);
   showResult(res, uci);
 }
 
@@ -1005,6 +1025,10 @@ function showResult(res, uci) {
     pzTimer = setTimeout(() => playLine(res), 900);
   } else playLine(res);
   $("pz-next").focus();
+  if (puz.kind === "repairs") {
+    $("pz-next").textContent = puz.opening ? "Next in this opening" : "Next spot";
+    if (res.learned) sfx("end");
+  } else $("pz-next").textContent = "Next puzzle";
 }
 
 function playLine(res) {
@@ -1020,11 +1044,70 @@ function playLine(res) {
 
 function exitPuzzles(toProfile = true) {
   clearTimeout(pzTimer);
+  const kind = puz ? puz.kind : "puzzles";
   puz = null; selected = null;
   $("puzzlebar").classList.add("hidden"); $("playbar").classList.remove("hidden");
   flipped = game ? game.human === "black" : false;
   if (game) update(); else render();
-  if (toProfile) showTab("puzzles");
+  if (toProfile) showTab(kind);
+}
+
+// ---------------------------------------------------------------------------
+// Opening repair: the moves you keep playing that keep costing you
+// ---------------------------------------------------------------------------
+async function loadRepairs(player) {
+  if (!player) { $("repairs").innerHTML = `<p class="muted">Import your games first.</p>`; return; }
+  let s;
+  try { s = await api(`/api/repairs/${encodeURIComponent(player)}`); }
+  catch (e) { $("repairs").innerHTML = `<p class="muted">${escapeHtml(e.message)}</p>`; return; }
+  if (!s.total) {
+    $("repairs").innerHTML = `<h2>Opening repair</h2>
+      <p>Nothing to repair yet. Nemesis looks for moves in your first 12 that you've played in at least
+      two games and that cost you at least half a pawn each time.</p>
+      <p class="muted">Imported your games before opening repair existed? Retrain once to look for them.</p>
+      <div class="row"><button id="rp-retrain">Retrain and look</button></div>`;
+    $("rp-retrain").onclick = async () => { const { job } = await api(`/api/train/${encodeURIComponent(player)}`, {}); watchJob(job); showTab("import"); };
+    return;
+  }
+  const rows = s.openings.map((o, i) => {
+    const ready = o.spots - o.resting;
+    const btn = ready ? `<button class="ghost small" data-op="${i}">${o.learned === o.spots ? "Review" : "Drill"}</button>`
+                      : `<span class="muted" title="You got these right recently. Come back in an hour so the next try tests your memory.">resting</span>`;
+    return `<tr><td>${escapeHtml(o.opening)}</td><td class="n">${pct(o.score)}</td>
+      <td class="n">${o.learned} / ${o.spots}</td><td class="n">${btn}</td></tr>`;
+  }).join("");
+  const ready = s.total - s.resting;
+  $("repairs").innerHTML = `<h2>Opening repair</h2>
+    <p>${s.total} habit${s.total > 1 ? "s" : ""} in your openings that keep costing you, worst openings first.
+    Each one is learned once you find a good move three times in a row, at least an hour apart.</p>
+    <table><tr><th>Opening</th><th class="n">your score</th><th class="n">learned</th><th></th></tr>${rows}</table>
+    ${s.resting ? `<p class="muted">${s.resting} resting: you got ${s.resting > 1 ? "them" : "it"} right recently. Come back in an hour so the next try tests your memory.</p>` : ""}
+    <div class="row">${ready ? `<button id="rp-start">${s.learned < s.total ? "Start with your weakest" : "Review them all"}</button>` : ""}</div>`;
+  if (ready) $("rp-start").onclick = () => nextDrill("repairs");
+  document.querySelectorAll("#repairs [data-op]").forEach(b => b.onclick = () => nextDrill("repairs", null, s.openings[+b.dataset.op].opening));
+}
+
+function startRepair(spot) {
+  const side = spot.color === "white" ? "White" : "Black";
+  const streak = spot.streak ? ` You've got it right ${spot.streak} time${spot.streak > 1 ? "s" : ""} in a row.` : "";
+  $("pz-now").innerHTML = `<b>${escapeHtml(spot.opening)}</b><br><span class="muted">Playing through your usual line…</span>`;
+  $("repairs").innerHTML = `<h2>Opening repair</h2>
+    <p>In ${spot.times} of the ${spot.visits} games where you reached this position, you played <b>${escapeHtml(spot.habit_san)}</b>, and it cost you.
+    Find something better.${streak}</p>
+    <p class="muted">Any move that keeps the position about as good as the best one counts.</p>`;
+  showTab("repairs");
+  // Replay the opening up to the moment of truth, then hand over the board.
+  puz.intro = true; puz.shown = spot.start_fen; puz.last = null; render();
+  const { line, fens } = spot.intro;
+  let i = 0;
+  const step = () => {
+    if (!puz || puz.p !== spot) return;
+    if (i < fens.length) { puz.shown = fens[i]; puz.last = line[i]; i++; render(); pzTimer = setTimeout(step, 350); return; }
+    puz.intro = false; render();
+    $("pz-now").innerHTML = `<b>${escapeHtml(spot.opening)}, move ${spot.move_number}. ${side} to move.</b>
+      <br><span class="muted">You usually play ${escapeHtml(spot.habit_san)} here. Find a better move.</span>`;
+  };
+  pzTimer = setTimeout(step, 400);
 }
 
 $("pz-hint").onclick = () => {
@@ -1033,11 +1116,10 @@ $("pz-hint").onclick = () => {
   $("pz-hint").classList.add("hidden");
 };
 $("pz-giveup").onclick = async () => {
-  const res = await api(`/api/puzzle/${encodeURIComponent(puz.p.id)}/attempt`, { uci: "", hinted: pzHinted });
-  showResult(res, "");
+  showResult(await DRILLS[puz.kind].attempt(puz, ""), "");
 };
 $("pz-replay").onclick = () => puz && puz.result && playLine(puz.result);
-$("pz-next").onclick = () => nextPuzzle(puz && puz.p.id);
+$("pz-next").onclick = () => puz && nextDrill(puz.kind, puz.p.id, puz.opening);
 $("pz-flip").onclick = () => { flipped = !flipped; render(); };
 $("pz-exit").onclick = () => exitPuzzles();
 

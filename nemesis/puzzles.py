@@ -85,7 +85,11 @@ def what_went_wrong(board: chess.Board, played: chess.Move) -> str | None:
     me = board.turn
     after = board.copy(stack=False)
     after.push(played)
-    hanging = sorted(hanging_squares(after, me), key=lambda sq: -VALUE[after.piece_type_at(sq)])
+    hanging = hanging_squares(after, me)
+    taken = board.piece_type_at(played.to_square)
+    if taken and VALUE[taken] >= VALUE[board.piece_type_at(played.from_square)]:
+        hanging.discard(played.to_square)   # a fair trade, not a piece left hanging
+    hanging = sorted(hanging, key=lambda sq: -VALUE[after.piece_type_at(sq)])
     if hanging:
         sq = hanging[0]
         piece = f"your {PIECE[after.piece_type_at(sq)]} on {chess.square_name(sq)}"

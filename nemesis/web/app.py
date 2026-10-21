@@ -21,7 +21,7 @@ from pydantic import BaseModel
 
 from nemesis.analysis.install import ensure_stockfish
 from nemesis.analysis.stockfish import StockfishAnalyzer
-from nemesis import commentary, puzzles, ratings, timecontrol
+from nemesis import commentary, puzzles, ratings, repairs, timecontrol
 from nemesis.engine import Nemesis
 from nemesis.search import Decision
 from nemesis.features import STYLE_TEXT
@@ -86,6 +86,11 @@ class CommentaryReq(BaseModel):
 class AttemptReq(BaseModel):
     uci: str
     hinted: bool = False
+
+
+class RepairAttemptReq(BaseModel):
+    id: str
+    uci: str
 
 
 class EloReq(BaseModel):
@@ -187,6 +192,9 @@ def create_app(db: str | Path = DEFAULT_DB, depth: int = 10) -> FastAPI:
         found = metrics.get("new_puzzles", 0)
         job.message = (f"Done: studied {metrics['samples']} of your moves from {metrics['games']} games"
                        + (f", and found {found} new puzzle{'s' if found != 1 else ''} in your mistakes." if found else "."))
+        if metrics.get("repair_spots"):
+            n = metrics["repair_spots"]
+            job.message += f" {n} opening habit{'s' if n != 1 else ''} to repair."
         for g in games.values():
             if g.player == job.player:
                 g.engine.reload()
@@ -509,6 +517,22 @@ def create_app(db: str | Path = DEFAULT_DB, depth: int = 10) -> FastAPI:
             return puzzles.attempt(store, puzzle_id, req.uci, req.hinted)
         except KeyError:
             raise HTTPException(404, "No such puzzle")
+
+    @app.get("/api/repairs/{player}")
+    def repair_summary(player: str) -> dict:
+        return repairs.summary(store, player)
+
+    @app.get("/api/repairs/{player}/next")
+    def repair_next(player: str, opening: str | None = None, skip: str | None = None) -> dict:
+        s = repairs.next_spot(store, player, opening, skip)
+        return {"spot": repairs.public(store, player, s) if s else None}
+
+    @app.post("/api/repairs/{player}/attempt")
+    def repair_attempt(player: str, req: RepairAttemptReq) -> dict:
+        try:
+            return repairs.attempt(store, player, req.id, req.uci)
+        except KeyError:
+            raise HTTPException(404, "No such spot")
 
     @app.get("/api/games/list/{player}")
     def list_games(player: str) -> list[dict]:

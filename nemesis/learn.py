@@ -9,7 +9,7 @@ from typing import Callable
 import chess
 import chess.pgn
 
-from nemesis import puzzles, ratings, timecontrol
+from nemesis import puzzles, ratings, repairs, timecontrol
 from nemesis.analysis.stockfish import Analyzer
 from nemesis.ingest.pgn import to_rows
 from nemesis.profile.move_model import MoveModel, build_samples, train_player, train_population
@@ -29,6 +29,7 @@ def train(store: Store, player: str, analyzer: Analyzer, max_games: int | None =
     metrics["profile"] = style_profile(store, player, model, samples)
     store.save_model(player, model.to_dict(), metrics)
     metrics["new_puzzles"] = puzzles.mine(store, player, analyzer, samples, model)
+    metrics["repair_spots"] = len(repairs.build(store, player, analyzer, samples))
     return model, metrics
 
 

@@ -150,6 +150,15 @@ Open the **Puzzles** tab to drill the positions where you went wrong in your own
 - **Hint** names the theme (a fork, a threat, a piece in danger, checkmate…) without giving the move.
 - **After you answer**, Nemesis shows the solution and what follows on the board, and reminds you what you played in the real game and what it cost.
 
+## Opening repair
+
+The **Openings** tab finds your habits: moves in your first 12 that you've played in at least two games and that cost you at least half a pawn each time.
+
+- **Worst openings first,** by your score in the games that reached each habit.
+- **One spot per habit:** if a habit leads to more trouble later in the same line, only the first move is drilled, since the rest only happens because of it.
+- **Play through your line:** the board replays your usual moves up to the habit, then you find a better move. Any move about as good as the best one counts.
+- **Learned** means a good move three times in a row, at least an hour apart, so it tests memory rather than repetition. Spots you just got right rest in the meantime; ones you miss come straight back.
+
 ## Does exploitation pay?
 
 `scripts/simulate.py` generates games for synthetic players with known styles. `scripts/benchmark.py` then plays Nemesis (risk 100, full strength) and plain Stockfish at the same depth against the same player, using the same seeds. Results after training on 30 games of each:
@@ -175,6 +184,7 @@ nemesis/
   ratings.py    Elo for you and for each Nemesis risk tier
   review.py     game review: accuracy, labels, key moments, Nemesis's side
   puzzles.py    puzzles mined from your mistakes
+  repairs.py    opening repair: your costly opening habits, drilled with spacing
   engine.py     Nemesis = model + opening tree + search
   launcher.py   double-click entry: free port, reuse a running copy, open the browser
   learn.py      training pipeline; recording games played against Nemesis

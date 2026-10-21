@@ -103,6 +103,19 @@ CREATE TABLE IF NOT EXISTS puzzle_attempts (
     hinted    INTEGER NOT NULL DEFAULT 0
 );
 
+CREATE TABLE IF NOT EXISTS repairs (  -- opening habits worth unlearning, rebuilt on each training
+    player TEXT PRIMARY KEY,
+    data   TEXT NOT NULL                -- JSON list of spots
+);
+
+CREATE TABLE IF NOT EXISTS repair_attempts (
+    player  TEXT NOT NULL,
+    key     TEXT NOT NULL,                -- the spot's position key
+    at      TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    move    TEXT NOT NULL,
+    correct INTEGER NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS models (
     player     TEXT PRIMARY KEY,
     weights    TEXT NOT NULL,
@@ -355,6 +368,34 @@ class Store:
             self.conn.execute("INSERT INTO puzzle_attempts(puzzle_id, move, solved, hinted) VALUES (?,?,?,?)",
                               (pid, move, int(solved), int(hinted)))
             self.conn.commit()
+
+    # -- opening repair ----------------------------------------------------
+    def put_repairs(self, player: str, spots: list[dict]) -> None:
+        with self._lock:
+            self.conn.execute("INSERT OR REPLACE INTO repairs VALUES (?,?)", (player.lower(), json.dumps(spots)))
+            self.conn.commit()
+
+    def repairs(self, player: str) -> list[dict]:
+        with self._lock:
+            row = self.conn.execute("SELECT data FROM repairs WHERE player=?", (player.lower(),)).fetchone()
+        return json.loads(row["data"]) if row else []
+
+    def add_repair_attempt(self, player: str, key: str, move: str, correct: bool, at: str | None = None) -> None:
+        with self._lock:
+            self.conn.execute(
+                "INSERT INTO repair_attempts(player, key, move, correct, at) VALUES (?,?,?,?,COALESCE(?, CURRENT_TIMESTAMP))",
+                (player.lower(), key, move, int(correct), at))
+            self.conn.commit()
+
+    def repair_attempts(self, player: str) -> dict[str, list[tuple[bool, str]]]:
+        """Each spot's drill results as (correct, UTC time), oldest first."""
+        with self._lock:
+            rows = self.conn.execute("SELECT key, correct, at FROM repair_attempts WHERE player=? ORDER BY rowid",
+                                     (player.lower(),)).fetchall()
+        out: dict[str, list[tuple[bool, str]]] = {}
+        for r in rows:
+            out.setdefault(r["key"], []).append((bool(r["correct"]), r["at"]))
+        return out
 
     # -- models ------------------------------------------------------------
     def save_model(self, player: str, weights: dict, metrics: dict) -> None:
