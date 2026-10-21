@@ -49,7 +49,8 @@
   .pc { position: absolute; inset: 0; z-index: 1; display: flex; align-items: center; justify-content: center; line-height: 1; }
   .pc.w { color: #fff; text-shadow: 0 0 2px #000, 0 0 1px #000, 0 1px 0 #000; }
   .pc.b { color: #111; text-shadow: 0 0 1px rgba(255,255,255,.6); }
-  .coord { position: absolute; font-size: 10px; color: rgba(0,0,0,.45); font-family: ui-monospace, monospace; }
+  .coord { position: absolute; z-index: 2; font-size: 11px; font-weight: 600; font-family: ui-sans-serif, system-ui, sans-serif; }
+  .sq.l .coord { color: var(--dark-sq); } .sq.d .coord { color: var(--light-sq); }
   .coord.f { right: 3px; bottom: 1px; } .coord.r { left: 3px; top: 1px; }
   .row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-top: 12px; }
   label { color: var(--muted); font-size: 13px; }
@@ -292,7 +293,7 @@ function render() {
     const rank = flipped ? r + 1 : 8 - r, file = flipped ? 7 - f : f;
     const name = "abcdefgh"[file] + rank;
     const d = document.createElement("div");
-    d.className = "sq " + ((file + rank) % 2 ? "l" : "d");
+    d.className = "sq " + ((file + rank) % 2 ? "d" : "l");  // a1 (file 0, rank 1) is dark
     if (last.includes(name)) d.classList.add("last");
     if (name === selected) d.classList.add("sel");
     if (targets.has(name)) d.classList.add("target");
@@ -305,7 +306,7 @@ function render() {
       d.appendChild(s);
       if (!review && game && game.check && p.toLowerCase() === "k" && (white ? "white" : "black") === turn) d.classList.add("incheck");
     }
-    if (f === 7) d.insertAdjacentHTML("beforeend", `<span class="coord r">${rank}</span>`);
+    if (f === 0) d.insertAdjacentHTML("beforeend", `<span class="coord r">${rank}</span>`);
     if (r === 7) d.insertAdjacentHTML("beforeend", `<span class="coord f">${"abcdefgh"[file]}</span>`);
     d.onclick = () => click(name);
     el.appendChild(d);
