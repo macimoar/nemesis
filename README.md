@@ -160,6 +160,15 @@ The **Openings** tab finds your habits: moves in your first 12 that you've playe
 - **Play through your line:** the board replays your usual moves up to the habit, then you find a better move. Any move about as good as the best one counts.
 - **Learned** means a good move three times in a row, at least an hour apart, so it tests memory rather than repetition. Spots you just got right rest in the meantime; ones you miss come straight back.
 
+## Doppelgänger mode
+
+Pick **Opponent → Doppelgänger of …** to play against a copy of anyone Nemesis has studied: a friend, a rival you're about to face, or yourself. Import their games first, like your own.
+
+- **Their openings:** in positions they've reached before, it plays what they played, as often as they played it.
+- **Their habits:** after that, it picks each move with the probability that player would, according to their move model. It grabs, trades, attacks and blunders about as they do. There's no search and no traps, and its slips aren't announced.
+- **X-Ray** shows how likely they were to play each option; **Poker Face** keeps quiet.
+- Practice games aren't rated, but Nemesis still learns from your moves in them.
+
 ## Does exploitation pay?
 
 `scripts/simulate.py` generates games for synthetic players with known styles. `scripts/benchmark.py` then plays Nemesis (risk 100, full strength) and plain Stockfish at the same depth against the same player, using the same seeds. Results after training on 30 games of each:
@@ -186,6 +195,7 @@ nemesis/
   review.py     game review: accuracy, labels, key moments, Nemesis's side
   puzzles.py    puzzles mined from your mistakes
   repairs.py    opening repair: your costly opening habits, drilled with spacing
+  doppelganger.py  play like any imported player
   engine.py     Nemesis = model + opening tree + search
   launcher.py   double-click entry: free port, reuse a running copy, open the browser
   learn.py      training pipeline; recording games played against Nemesis

@@ -201,6 +201,11 @@
       <button id="newgame">New game</button>
     </div>
     <div class="row">
+      <label>Opponent <select id="opponent"><option value="">Nemesis: plays to beat you</option></select></label>
+    </div>
+    <p id="doppelnote" class="muted hidden" style="margin:8px 0 0;font-size:13px">A Doppelgänger plays like that player:
+      their openings, their habits, their blunders. Practice games aren't rated, but Nemesis still learns from your moves.</p>
+    <div class="row" id="riskrow">
       <label for="risk">Risk</label>
       <input id="risk" type="range" min="0" max="100" value="50">
       <span id="risklabel" class="muted"></span>
@@ -216,7 +221,7 @@
         <option value="10+0">10 min · Rapid</option>
         <option value="15+10">15 | 10 · Rapid</option>
       </select></label>
-      <label>Strength <select id="strength">
+      <label id="strengthlabel">Strength <select id="strength">
         <option value="0">Match me (your rating + 50)</option>
       </select></label>
     </div>
@@ -427,7 +432,7 @@ async function submitMove(uci) {
   sfx(moveSound(uci));
   if (puz) return answerPuzzle(uci);
   pendingMove = uci;
-  $("status").textContent = "Nemesis is thinking…";
+  $("status").textContent = `${oppName()} is thinking…`;
   render();
   if (game.clock) {  // stop your clock now; Nemesis's runs while it thinks
     const human = game.human;
@@ -543,14 +548,15 @@ function update() {
     const d = document.createElement("div");
     d.className = "msg " + m.who + (m.kind === "reaction" ? " reaction" : "");
     if (m.who === "you") d.innerHTML = `<b>You</b>${m.san}`;
-    else d.innerHTML = `<b>${m.kind === "move" ? "Nemesis plays " + m.san : "Nemesis"}</b>${speech(m.lines || [])}`;
+    else d.innerHTML = `<b>${m.kind === "move" ? oppName() + " plays " + m.san : m.kind === "info" ? "Nemesis" : oppName()}</b>${speech(m.lines || [])}`;
     log.appendChild(d);
   }
   $("resign").disabled = game.finished;
-  $("status").textContent = game.finished ? (game.result === "*" ? game.reason : `Game over: ${game.result}${game.reason ? ". " + game.reason : ""}`) : (game.turn === game.human ? "Your move." : "Nemesis is thinking…");
+  $("status").textContent = game.finished ? (game.result === "*" ? game.reason : `Game over: ${game.result}${game.reason ? ". " + game.reason : ""}`) : (game.turn === game.human ? "Your move." : `${oppName()} is thinking…`);
   $("commentary").value = game.commentary;
   $("reviewgame").classList.toggle("hidden", !(game.finished && game.game_id));
-  renderStrip(game.ratings, game.tier, game.elo);
+  if (game.doppel) $("strip").innerHTML = `<span>Practice game vs <b>${escapeHtml(game.opponent)}</b></span><span class="muted">not rated</span>`;
+  else renderStrip(game.ratings, game.tier, game.elo);
   showThinking();
   if (game.finished) setTimeout(() => loadProfile($("player").value), 4000);
 }
@@ -573,13 +579,18 @@ function showThinking() {
     html += `<div class="msg reaction"><b>Your move${you ? ": " + you : ""}</b>${speech(log[ri].lines)}</div>`;
   }
   if (mi > ri || (mi >= 0 && ri < 0)) {  // Nemesis has replied since (it hasn't yet if the game just ended)
-    html += `<div class="msg nemesis" style="margin-top:8px"><b>Nemesis plays ${log[mi].san}</b>${speech(log[mi].lines)}</div>`;
+    html += `<div class="msg nemesis" style="margin-top:8px"><b>${oppName()} plays ${log[mi].san}</b>${speech(log[mi].lines)}</div>`;
   }
   if (!html) {
     $("thinking").innerHTML = `<p class="muted">Once you're playing, Nemesis's reaction to your move and its own reasoning appear here.</p>`;
     return;
   }
-  if (game.commentary === "poker") {
+  if (game.doppel && game.commentary !== "poker" && mi >= 0 && log[mi].choices) {
+    const rows = log[mi].choices.map(c => `<tr><td>${c.san}</td><td class="n">${pct(c.prob)}</td></tr>`).join("");
+    html += `<h3>How ${escapeHtml(game.doppel)} might have played</h3>
+      <table><tr><th>Move</th><th class="n">Chance they'd play it</th></tr>${rows}</table>
+      <p class="muted">The Doppelgänger rolls the dice with these odds, so it can surprise you the way the real player would.</p>`;
+  } else if (game.commentary === "poker") {
     html += `<p class="muted" style="margin-top:12px">Poker Face: Nemesis keeps its reasoning to itself. Switch commentary to X-Ray to see it.</p>`;
   } else if (mi >= 0 && log[mi].candidates) {
     const rows = log[mi].candidates.map(c => `<tr><td>${c.san}</td><td class="n">${pct(c.objective)}</td><td class="n">${pct(c.exploit)}</td></tr>`).join("");
@@ -604,6 +615,12 @@ async function loadPlayers(select) {
   sel.innerHTML = ps.map(p => `<option value="${p.player}">${p.player} (${p.games})</option>`).join("") || `<option value="">no players yet</option>`;
   if (cur && ps.some(p => p.player === cur)) sel.value = cur;
   if (sel.value) { loadProfile(sel.value); loadRatings(sel.value); }
+  // Anyone Nemesis has studied can be played as a Doppelgänger, yourself included.
+  const opp = $("opponent"), was = opp.value;
+  opp.innerHTML = `<option value="">Nemesis: plays to beat you</option>` + ps.filter(p => p.trained_at)
+    .map(p => `<option value="${p.player}">Doppelgänger of ${p.player}</option>`).join("");
+  if ([...opp.options].some(o => o.value === was)) opp.value = was;
+  opponentChanged();
   if (!ps.length && !welcomeSkipped) showWelcome();
 }
 
@@ -752,7 +769,7 @@ $("newgame").onclick = async () => {
   flipped = $("color").value === "black";
   selected = null;
   $("status").textContent = "Starting…";
-  try { game = await api("/api/games", { player, color: $("color").value, risk: $("risk").value / 100, commentary: $("commentary").value, elo: +$("strength").value || null, tc: $("tc").value || null }); update(); }
+  try { game = await api("/api/games", { player, color: $("color").value, risk: $("risk").value / 100, commentary: $("commentary").value, elo: +$("strength").value || null, tc: $("tc").value || null, opponent: $("opponent").value || null }); update(); }
   catch (e) { $("status").textContent = e.message; }
 };
 $("resign").onclick = async () => { if (game) { game = await api(`/api/games/${game.id}/resign`, {}); update(); } };
@@ -1146,6 +1163,18 @@ $("pz-next").onclick = () => puz && nextDrill(puz.kind, puz.p.id, puz.opening);
 $("pz-flip").onclick = () => { flipped = !flipped; render(); };
 $("pz-exit").onclick = () => exitPuzzles();
 
+// ---------------------------------------------------------------------------
+// Opponent: Nemesis, or a Doppelgänger of anyone Nemesis has studied
+// ---------------------------------------------------------------------------
+const oppName = () => game && game.doppel ? `${game.doppel} (copy)` : "Nemesis";
+function opponentChanged() {
+  const doppel = !!$("opponent").value;
+  $("riskrow").classList.toggle("hidden", doppel);
+  $("strengthlabel").classList.toggle("hidden", doppel);
+  $("doppelnote").classList.toggle("hidden", !doppel);
+}
+$("opponent").onchange = opponentChanged;
+
 for (let e = 800; e <= 2400; e += 100) $("strength").insertAdjacentHTML("beforeend", `<option value="${e}">${e}${e === 2400 ? " (full strength)" : ""}</option>`);
 try { const saved = localStorage.getItem("nemesis-strength"); if (saved) $("strength").value = saved; } catch (e) {}
 $("strength").onchange = async () => {
@@ -1313,7 +1342,7 @@ function tickClocks() {
   const top = flipped ? "white" : "black", bottom = flipped ? "black" : "white";
   for (const [id, color] of [["clock-top", top], ["clock-bottom", bottom]]) {
     const t = clockLeft(color), el = $(id);
-    el.querySelector(".who").textContent = color === game.human ? "You" : "Nemesis";
+    el.querySelector(".who").textContent = color === game.human ? "You" : oppName();
     el.querySelector(".time").textContent = fmtClock(t);
     el.classList.toggle("running", game.clock.running === color);
     el.classList.toggle("low", t < 20);

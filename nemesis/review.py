@@ -106,7 +106,7 @@ def review_game(store: Store, analyzer: Analyzer, game_id: str,
     moves = store.moves(game_id)
     annotations = store.get_json("annotations", game_id)
     vs_nemesis = game.source == "nemesis"
-    opponent = "Nemesis" if vs_nemesis else (game.opponent or "your opponent")
+    opponent = game.opponent or ("Nemesis" if vs_nemesis else "your opponent")
 
     rows: list[dict] = []
     graph: list[float] = []

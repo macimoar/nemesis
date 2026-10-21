@@ -43,7 +43,7 @@ def train_pooled(store: Store, analyzer: Analyzer, max_games_each: int | None = 
 
 def build_pgn(player: str, player_color: chess.Color, moves: list[str], result: str | None = None,
               start_fen: str = chess.STARTING_FEN, tc: TimeControl | None = None,
-              clocks: list[float | None] | None = None) -> chess.pgn.Game:
+              clocks: list[float | None] | None = None, opponent: str = "Nemesis") -> chess.pgn.Game:
     """A game against Nemesis as PGN, with clock times when known. `result` None = from the board."""
     board = chess.Board(start_fen)
     game = chess.pgn.Game()
@@ -62,8 +62,8 @@ def build_pgn(player: str, player_color: chess.Color, moves: list[str], result: 
     game.headers.update({
         "Event": f"Nemesis {timecontrol.category(tc)}", "TimeControl": tc.pgn() if tc else "-",
         "Site": f"nemesis/{uuid.uuid4().hex[:12]}",
-        "White": player if player_color == chess.WHITE else "Nemesis",
-        "Black": player if player_color == chess.BLACK else "Nemesis",
+        "White": player if player_color == chess.WHITE else opponent,
+        "Black": player if player_color == chess.BLACK else opponent,
         "Result": result, "Date": now.strftime("%Y.%m.%d"),
         "UTCDate": now.strftime("%Y.%m.%d"), "UTCTime": now.strftime("%H:%M:%S"),
     })
@@ -73,17 +73,19 @@ def build_pgn(player: str, player_color: chess.Color, moves: list[str], result: 
 def record_game(store: Store, player: str, player_color: chess.Color, moves: list[str],
                 result: str | None = None, start_fen: str = chess.STARTING_FEN,
                 risk: float | None = None, annotations: list[dict] | None = None,
-                tc: TimeControl | None = None, clocks: list[float] | None = None) -> str | None:
+                tc: TimeControl | None = None, clocks: list[float] | None = None,
+                opponent: str = "Nemesis") -> str | None:
     """Store a game played against Nemesis so the next retrain learns from it.
 
     `result` is a PGN result ("1-0", "0-1", "1/2-1/2"). If it is None, it is taken from the board.
     With `risk`, a decided game is also rated (in its time control's rating); `annotations`
     (Decision.annotation per Nemesis move) are kept for the game review. `clocks` holds each
     mover's remaining seconds after each move, so training sees how you play under time pressure.
+    `opponent` names the other side, e.g. a Doppelgänger (whose games are never rated).
     """
     if not moves:
         return None
-    game = build_pgn(player, player_color, moves, result, start_fen, tc, clocks)
+    game = build_pgn(player, player_color, moves, result, start_fen, tc, clocks, opponent)
     rows = to_rows(game, player, source="nemesis")
     if rows is None:
         return None

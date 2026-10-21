@@ -22,6 +22,8 @@ from pydantic import BaseModel
 from nemesis.analysis.install import ensure_stockfish
 from nemesis.analysis.stockfish import StockfishAnalyzer
 from nemesis import commentary, puzzles, ratings, repairs, timecontrol
+from nemesis import doppelganger
+from nemesis.doppelganger import Doppelganger
 from nemesis.engine import Nemesis
 from nemesis.search import Decision
 from nemesis.features import STYLE_TEXT
@@ -69,6 +71,7 @@ class NewGameReq(BaseModel):
     commentary: str = "xray"  # xray | poker
     elo: int | None = None    # Nemesis's strength; None/0 = "match me" (your rating + 50)
     tc: str | None = None     # time control preset, e.g. "3+2"; None = untimed
+    opponent: str | None = None   # play a Doppelgänger of this player instead of Nemesis
 
 
 class MoveReq(BaseModel):
@@ -127,6 +130,11 @@ class Game:
     clocks: list = field(default_factory=list)       # mover's seconds left after each move
     reason: str = ""                                 # how it ended, when not by the board
     last_draw_offer: int = -99                       # your move number when you last offered a draw
+    doppel: Doppelganger | None = None               # set when playing a Doppelgänger, not Nemesis
+
+    @property
+    def opponent(self) -> str:
+        return doppelganger.label(self.doppel.name) if self.doppel else "Nemesis"
 
     def time_left(self, color: chess.Color) -> float | None:
         if not self.tc:
@@ -215,6 +223,7 @@ def create_app(db: str | Path = DEFAULT_DB, depth: int = 10) -> FastAPI:
             "tier": ratings.tier(g.engine.risk), "elo": round(g.engine.target_elo()),
             "fixed_elo": g.engine.fixed_elo, "ratings": ratings.summary(store, g.player, g.engine.tc),
             "game_id": g.game_id, "reason": g.reason,
+            "opponent": g.opponent, "doppel": g.doppel.name if g.doppel else None,
             "draw_offer_in": max(0, DRAW_OFFER_GAP - (g.board.fullmove_number - g.last_draw_offer)),
             "clock": None if not g.tc else {
                 "white": g.time_left(chess.WHITE), "black": g.time_left(chess.BLACK),
@@ -241,7 +250,7 @@ def create_app(db: str | Path = DEFAULT_DB, depth: int = 10) -> FastAPI:
         # Running out loses, unless the opponent has nothing left to checkmate with.
         draw = g.board.has_insufficient_material(not color)
         result = "1/2-1/2" if draw else ("0-1" if color == chess.WHITE else "1-0")
-        who = "You" if color == g.human else "Nemesis"
+        who = "You" if color == g.human else g.opponent
         g.reason = f"{who} ran out of time" + (", but the other side can't checkmate: draw." if draw else ".")
         finish(g, result)
 
@@ -250,8 +259,8 @@ def create_app(db: str | Path = DEFAULT_DB, depth: int = 10) -> FastAPI:
         # Rate against the tier Nemesis mostly played at (the risk can change mid-game).
         risks = [a["risk"] for a in g.annotations] or [g.engine.risk]
         g.game_id = record_game(store, g.player, g.human, [m.uci() for m in g.board.move_stack],
-                                result=result, risk=sum(risks) / len(risks), annotations=g.annotations,
-                                tc=g.tc, clocks=g.clocks)
+                                result=result, risk=None if g.doppel else sum(risks) / len(risks),
+                                annotations=g.annotations, tc=g.tc, clocks=g.clocks, opponent=g.opponent)
         if g.game_id is None:  # no moves were played: aborted, like on Chess.com
             g.result = "*"
             lines = [f"{g.reason + ' ' if g.reason else ''}No moves were played, so the game was aborted and isn't rated."]
@@ -260,7 +269,9 @@ def create_app(db: str | Path = DEFAULT_DB, depth: int = 10) -> FastAPI:
             return
         job = Job(id=uuid.uuid4().hex[:8], kind="learn", player=g.player)
         jobs[job.id] = job
-        lines = [f"Game over ({result}). {g.reason + ' ' if g.reason else ''}I'm studying this one."]
+        lines = [f"Game over ({result}). {g.reason + ' ' if g.reason else ''}"
+                 + ("Practice games aren't rated, but Nemesis still studies your moves." if g.doppel
+                    else "I'm studying this one.")]
         change = store.rating_change(g.game_id)
         for entity, (before, after) in change.items():
             info = ratings.parse_entity(entity)
@@ -278,6 +289,20 @@ def create_app(db: str | Path = DEFAULT_DB, depth: int = 10) -> FastAPI:
         me = g.board.turn
         g.turn_started = time.monotonic()
         budget = timecontrol.think_budget(g.time_left(me), g.tc.increment) if g.tc else None
+        if g.doppel:
+            move, lines, choices = g.doppel.choose(g.board, own_clock=g.time_left(me), budget=budget)
+            san = g.board.san(move)
+            if not end_move_clock(g, me):
+                out_of_time(g, me)
+                return
+            g.board.push(move)
+            entry = {"who": "nemesis", "kind": "move", "san": san, "lines": lines}
+            if g.doppel.mode == commentary.XRAY:
+                entry["choices"] = choices
+            g.log.append(entry)
+            if g.board.is_game_over(claim_draw=True):
+                finish(g, g.board.result(claim_draw=True))
+            return
         decision = g.engine.choose(g.board, human_clock=g.time_left(g.human), budget=budget)
         san = g.board.san(decision.move)
         g.annotations.append(decision.annotation(len(g.board.move_stack), g.engine.risk))
@@ -382,6 +407,10 @@ def create_app(db: str | Path = DEFAULT_DB, depth: int = 10) -> FastAPI:
                          mode=req.commentary, elo=req.elo or None, tc=timecontrol.category(tc))
         human = chess.WHITE if req.color == "white" else chess.BLACK
         g = Game(id=uuid.uuid4().hex[:10], player=req.player.lower(), human=human, engine=engine, tc=tc)
+        if req.opponent:
+            if store.load_model(req.opponent.lower()) is None:
+                raise HTTPException(400, f"{req.opponent} hasn't been studied yet: import their games first.")
+            g.doppel = Doppelganger(store, req.opponent, engine.analyzer, mode=req.commentary)
         if tc:
             g.clock = {chess.WHITE: tc.base, chess.BLACK: tc.base}
         g.turn_started = time.monotonic()
@@ -435,9 +464,13 @@ def create_app(db: str | Path = DEFAULT_DB, depth: int = 10) -> FastAPI:
             raise HTTPException(429, f"You can offer a draw again in {DRAW_OFFER_GAP - (move_no - g.last_draw_offer)} moves.")
         g.last_draw_offer = move_no
         g.log.append({"who": "you", "san": "offers a draw"})
-        accept, expected, cp = g.engine.consider_draw(g.board.copy())
-        g.log.append({"who": "nemesis", "kind": "reaction",
-                      "lines": commentary.draw_reply(accept, expected, cp, g.engine.mode, seed=g.board.fen())})
+        if g.doppel:
+            accept, _, cp = g.doppel.consider_draw(g.board.copy())
+            lines = g.doppel.draw_reply(accept, cp)
+        else:
+            accept, expected, cp = g.engine.consider_draw(g.board.copy())
+            lines = commentary.draw_reply(accept, expected, cp, g.engine.mode, seed=g.board.fen())
+        g.log.append({"who": "nemesis", "kind": "reaction", "lines": lines})
         if accept:
             g.reason = "Draw agreed."
             finish(g, "1/2-1/2")
@@ -448,7 +481,7 @@ def create_app(db: str | Path = DEFAULT_DB, depth: int = 10) -> FastAPI:
         """A game as a .pgn file: the one being played (live id) or any stored game."""
         if (g := games.get(game_id)) and not g.game_id:
             pgn = build_pgn(g.player, g.human, [m.uci() for m in g.board.move_stack],
-                            g.result or "*", tc=g.tc, clocks=g.clocks)
+                            g.result or "*", tc=g.tc, clocks=g.clocks, opponent=g.opponent)
             text, name = str(pgn), pgn.headers
         else:
             row = store.game(g.game_id if g else game_id)
@@ -480,6 +513,8 @@ def create_app(db: str | Path = DEFAULT_DB, depth: int = 10) -> FastAPI:
     def set_commentary(game_id: str, req: CommentaryReq) -> dict:
         g = get_game(game_id)
         g.engine.mode = commentary.normalise_mode(req.mode)
+        if g.doppel:
+            g.doppel.mode = g.engine.mode
         return state(g)
 
     @app.post("/api/games/{game_id}/elo")
@@ -542,7 +577,7 @@ def create_app(db: str | Path = DEFAULT_DB, depth: int = 10) -> FastAPI:
             change = next((v for e, v in store.rating_change(gr.id).items() if e.startswith("player:")), None)
             out.append({
                 "id": gr.id, "date": gr.played_at, "source": gr.source, "opening": gr.opening,
-                "opponent": "Nemesis" if gr.source == "nemesis" else gr.opponent,
+                "opponent": gr.opponent or ("Nemesis" if gr.source == "nemesis" else None),
                 "color": "white" if gr.color else "black", "result": gr.result,
                 "rating_change": round(change[1] - change[0]) if change else None,
                 "reviewed": cached_review(store, gr.id, depth) is not None,
