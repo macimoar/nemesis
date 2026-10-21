@@ -10,8 +10,8 @@ tier, game review, and a download-and-run app for Windows, macOS and Linux.
 
 ## v0.2 — Make it real
 
-Close the gaps between what's built and how you actually play. v0.2.0 shipped the
-clock and the "does it work on you?" stats; the rest arrives in v0.2.x updates.
+Close the gaps between what's built and how you actually play. Done: v0.2.0 shipped
+the clock and the "does it work on you?" stats, v0.2.1 and v0.2.2 the rest.
 
 - ✅ **Time controls and a clock.** Bullet, blitz and rapid in the web app, with
   ratings kept per time control. Nemesis has its own clock and budgets its thinking
@@ -19,8 +19,9 @@ clock and the "does it work on you?" stats; the rest arrives in v0.2.x updates.
   learns how you play under time pressure.
 - ✅ **Board basics:** promotion picker, drag-and-drop moves, move sounds, draw
   offers (Nemesis decides from its chances against you), and PGN download.
-- **Faster learning:** after a game, Nemesis analyses only the new game instead of
-  retraining from scratch. Retraining takes seconds instead of minutes.
+- ✅ **Faster learning:** each game's features are cached, so after a game only the
+  new one is computed. Retraining after a game takes about 1.5 seconds instead of
+  growing with every game you've played.
 - ✅ **"Does it work on you?"** The profile shows how often Nemesis guessed your
   exact move, game by game, and whether you fall for its traps more often than you
   make mistakes on other moves. This is the real test of the whole idea, and it

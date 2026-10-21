@@ -8,6 +8,9 @@ predictions and the model specialises as games come in.
 
 from __future__ import annotations
 
+import io
+import json
+import math
 from dataclasses import dataclass, field
 from typing import Callable
 
@@ -45,6 +48,7 @@ class Sample:
     loss: int = 0            # centipawn loss of the move played
     time_pressure: bool = False
     moves: list[str] = field(default_factory=list)
+    key: str = ""            # position key, to refresh the opening-book features
 
 
 class LeaveOneOut:
@@ -65,6 +69,46 @@ class LeaveOneOut:
 # Dataset construction
 # ---------------------------------------------------------------------------
 
+SAMPLES_VERSION = 1  # bump when features change, so cached samples are recomputed
+_BOOK_FREQ, _BOOK_DEV = INDEX["book_freq"], INDEX["book_deviation"]
+
+
+def pack_samples(samples: list[Sample]) -> tuple[bytes, str]:
+    """A game's samples as (npz bytes, JSON) for the samples cache."""
+    buf = io.BytesIO()
+    if samples:
+        np.savez_compressed(
+            buf, X=np.concatenate([s.X for s in samples]).astype(np.float32),
+            sizes=np.array([len(s.X) for s in samples]), chosen=np.array([s.chosen for s in samples]),
+            ply=np.array([s.ply for s in samples]), loss=np.array([s.loss for s in samples]),
+            tp=np.array([s.time_pressure for s in samples]))
+    meta = [{"phase": s.phase, "key": s.key, "moves": s.moves} for s in samples]
+    return buf.getvalue(), json.dumps(meta)
+
+
+def unpack_samples(data: bytes, meta: str, game_id: str) -> list[Sample]:
+    info = json.loads(meta)
+    if not info:
+        return []
+    arr = np.load(io.BytesIO(data))
+    bounds = np.cumsum(arr["sizes"])[:-1]
+    out = []
+    for i, X in enumerate(np.split(arr["X"].astype(np.float64), bounds)):
+        out.append(Sample(X=X, chosen=int(arr["chosen"][i]), game_id=game_id, ply=int(arr["ply"][i]),
+                          phase=info[i]["phase"], loss=int(arr["loss"][i]), time_pressure=bool(arr["tp"][i]),
+                          moves=info[i]["moves"], key=info[i]["key"]))
+    return out
+
+
+def refresh_book(sample: Sample, book) -> None:
+    """Recompute the two opening-book features from the current repertoire."""
+    total = book.total(sample.key)
+    for i, uci in enumerate(sample.moves):
+        freq = book.freq(sample.key, uci) if total else 0
+        sample.X[i, _BOOK_FREQ] = math.log1p(freq) if total else 0.0
+        sample.X[i, _BOOK_DEV] = 1.0 if total >= 3 and freq == 0 else 0.0
+
+
 def build_samples(
     store: Store,
     player: str,
@@ -79,6 +123,7 @@ def build_samples(
     if max_games:
         games = games[-max_games:]
     tree = tree or OpeningTree.from_store(store, player)
+    depth = getattr(analyzer, "depth", 0)
     samples: list[Sample] = []
     n = len(games)
     for gi, game in enumerate(games):
@@ -88,6 +133,18 @@ def build_samples(
         moves = store.moves(game.id)
         own = {(position_key(chess.Board(m.fen)), m.uci) for m in moves[:24] if m.is_player}
         book = LeaveOneOut(tree, own)
+        cached = store.get_samples(game.id, SAMPLES_VERSION, depth)
+        if cached is not None:
+            # A game's features never change, except the opening-book ones (your repertoire
+            # grows with every game), which are cheap to refresh.
+            for smp in unpack_samples(*cached, game_id=game.id):
+                smp.weight = recency
+                refresh_book(smp, book)
+                samples.append(smp)
+            if progress:
+                progress(gi + 1, n)
+            continue
+        game_samples: list[Sample] = []
         last_clock: float | None = None
         for m in moves:
             if not m.is_player:
@@ -104,11 +161,14 @@ def build_samples(
             ucis = [mv.uci() for mv in legal]
             if m.uci not in ucis:
                 continue
-            samples.append(Sample(
+            game_samples.append(Sample(
                 X=X, chosen=ucis.index(m.uci), weight=recency, game_id=game.id, ply=m.ply,
                 phase=_phase(board), loss=losses[m.uci],
                 time_pressure=clock_before is not None and clock_before < 30, moves=ucis,
+                key=position_key(board),
             ))
+        store.put_samples(game.id, SAMPLES_VERSION, depth, *pack_samples(game_samples))
+        samples.extend(game_samples)
         if progress:
             progress(gi + 1, n)
     return samples

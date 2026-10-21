@@ -76,6 +76,14 @@ CREATE TABLE IF NOT EXISTS model_history (  -- how well the model predicted you,
     baseline   REAL                     -- the generic model's top-1 on the same held-out moves
 );
 
+CREATE TABLE IF NOT EXISTS samples (  -- cached training features per game (see move_model)
+    game_id TEXT PRIMARY KEY,
+    version INTEGER NOT NULL,
+    depth   INTEGER NOT NULL,
+    data    BLOB NOT NULL,
+    meta    TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS models (
     player     TEXT PRIMARY KEY,
     weights    TEXT NOT NULL,
@@ -275,6 +283,21 @@ class Store:
     def delete_review(self, game_id: str) -> None:
         with self._lock:
             self.conn.execute("DELETE FROM reviews WHERE game_id=?", (game_id,))
+            self.conn.commit()
+
+    # -- cached training samples -------------------------------------------
+    def get_samples(self, game_id: str, version: int, depth: int) -> tuple[bytes, str] | None:
+        with self._lock:
+            row = self.conn.execute("SELECT version, depth, data, meta FROM samples WHERE game_id=?",
+                                    (game_id,)).fetchone()
+        if row is None or row["version"] != version or row["depth"] < depth:
+            return None
+        return row["data"], row["meta"]
+
+    def put_samples(self, game_id: str, version: int, depth: int, data: bytes, meta: str) -> None:
+        with self._lock:
+            self.conn.execute("INSERT OR REPLACE INTO samples VALUES (?,?,?,?,?)",
+                              (game_id, version, depth, data, meta))
             self.conn.commit()
 
     # -- models ------------------------------------------------------------
