@@ -10,7 +10,8 @@ tier, game review, and a download-and-run app for Windows, macOS and Linux.
 
 ## v0.2 — Make it real
 
-Close the gaps between what's built and how you actually play.
+Close the gaps between what's built and how you actually play. v0.2.0 shipped the
+clock and the "does it work on you?" stats; the rest arrives in v0.2.x updates.
 
 - ✅ **Time controls and a clock.** Bullet, blitz and rapid in the web app, with
   ratings kept per time control. Nemesis has its own clock and budgets its thinking
