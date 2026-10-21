@@ -45,6 +45,15 @@
   .sq.last::before, .sq.sel::before { content: ""; position: absolute; inset: 0; background: var(--hl); }
   .sq.target::after { content: ""; position: absolute; width: 28%; height: 28%; border-radius: 50%; background: var(--dot); }
   .sq.incheck { box-shadow: inset 0 0 0 4px var(--accent); }
+  .board { position: relative; touch-action: none; }
+  .sq.hover { box-shadow: inset 0 0 0 4px rgba(255, 255, 255, .75); }
+  .sq.dragfrom .pc { opacity: .3; }
+  .pc.ghost { position: fixed; z-index: 50; pointer-events: none; transform: translate(-50%, -50%); inset: auto; }
+  .promo { position: absolute; z-index: 20; width: 12.5%; display: flex; flex-direction: column;
+           background: var(--panel); border-radius: 6px; box-shadow: 0 6px 24px rgba(0, 0, 0, .35); overflow: hidden; }
+  .promo button { position: relative; aspect-ratio: 1; padding: 0; border-radius: 0; background: transparent;
+                  font-size: 9.5cqw; line-height: 1; cursor: pointer; }
+  .promo button:hover, .promo button:focus-visible { background: var(--accent-soft); outline: none; }
   /* Out of the layout flow, so a font's glyph metrics (they differ by OS) can't stretch a row. */
   .pc { position: absolute; inset: 0; z-index: 1; display: flex; align-items: center; justify-content: center; line-height: 1; }
   .pc.w { color: #fff; text-shadow: 0 0 2px #000, 0 0 1px #000, 0 1px 0 #000; }
@@ -94,6 +103,7 @@
   .clock.running { background: var(--panel); border-color: var(--ink); }
   .clock.running .who { color: var(--ink); }
   .clock.low .time { color: var(--accent); }
+  .clock.hidden { display: none; }   /* .clock's display:flex comes later than .hidden, so restate it */
   .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin: 10px 0; }
   .tile { padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; }
   .tile .k { color: var(--muted); font-size: 13px; }
@@ -308,6 +318,21 @@ function parseFen(fen) {
   return sq;
 }
 
+// Show a move you just made straight away, while the server (and Nemesis) catch up.
+function applyPending(pieces, uci) {
+  const from = uci.slice(0, 2), to = uci.slice(2, 4), p = pieces[from];
+  if (!p) return;
+  delete pieces[from];
+  if (p.toLowerCase() === "p" && from[0] !== to[0] && !pieces[to]) delete pieces[to[0] + from[1]];  // en passant
+  if (p.toLowerCase() === "k" && Math.abs(from.charCodeAt(0) - to.charCodeAt(0)) === 2) {           // castling
+    const r = from[1], [rf, rt] = to[0] === "g" ? ["h", "f"] : ["a", "d"];
+    pieces[rt + r] = pieces[rf + r]; delete pieces[rf + r];
+  }
+  pieces[to] = uci.length === 5 ? (p === p.toUpperCase() ? uci[4].toUpperCase() : uci[4]) : p;
+}
+
+let pendingMove = null;   // your move, sent but not yet confirmed
+
 function render() {
   const el = $("board"); el.innerHTML = "";
   let fen = game ? game.fen : "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w", lastUci = game && game.last;
@@ -316,6 +341,7 @@ function render() {
     lastUci = rply < 0 ? null : review.moves[rply].uci;
   }
   const pieces = parseFen(fen);
+  if (pendingMove && !review) { applyPending(pieces, pendingMove); lastUci = pendingMove; }
   const targets = new Set(selected && game && !review ? (game.legal[selected] || []).map(u => u.slice(2, 4)) : []);
   const last = lastUci ? [lastUci.slice(0, 2), lastUci.slice(2, 4)] : [];
   const turn = game ? game.turn : "white";
@@ -324,6 +350,7 @@ function render() {
     const name = "abcdefgh"[file] + rank;
     const d = document.createElement("div");
     d.className = "sq " + ((file + rank) % 2 ? "d" : "l");  // a1 (file 0, rank 1) is dark
+    d.dataset.sq = name;
     if (last.includes(name)) d.classList.add("last");
     if (name === selected) d.classList.add("sel");
     if (targets.has(name)) d.classList.add("target");
@@ -334,37 +361,135 @@ function render() {
       s.className = "pc " + (white ? "w" : "b");
       s.textContent = GLYPH[p.toLowerCase()];
       d.appendChild(s);
-      if (!review && game && game.check && p.toLowerCase() === "k" && (white ? "white" : "black") === turn) d.classList.add("incheck");
+      if (!review && !pendingMove && game && game.check && p.toLowerCase() === "k" && (white ? "white" : "black") === turn) d.classList.add("incheck");
     }
     if (f === 0) d.insertAdjacentHTML("beforeend", `<span class="coord r">${rank}</span>`);
     if (r === 7) d.insertAdjacentHTML("beforeend", `<span class="coord f">${"abcdefgh"[file]}</span>`);
-    d.onclick = () => click(name);
     el.appendChild(d);
   }
 }
 
-async function click(name) {
-  if (review || !game || game.finished) return;
-  if (selected && (game.legal[selected] || []).some(u => u.slice(2, 4) === name)) {
-    const opts = game.legal[selected].filter(u => u.slice(2, 4) === name);
-    const uci = opts.find(u => u.length === 4 || u.endsWith("q")) || opts[0];
-    selected = null;
-    $("status").textContent = "Nemesis is thinking…";
-    game.last = uci; render();
-    if (game.clock) {  // stop your clock now; Nemesis's runs while it thinks
-      const human = game.human;
-      game.clock[human] = clockLeft(human);
-      game.clock.running = human === "white" ? "black" : "white";
-      clockAt = performance.now();
-    }
-    try { game = await api(`/api/games/${game.id}/move`, { uci }); }
-    catch (e) { $("status").textContent = e.message; }
-    update();
-    return;
-  }
-  selected = game.legal[name] ? name : null;
-  render();
+// ---------------------------------------------------------------------------
+// Moving: click a piece then a square, or drag it. Promotions ask which piece.
+// ---------------------------------------------------------------------------
+const canMove = () => game && !game.finished && !review && !pendingMove && !promoOpen && game.turn === game.human;
+const movesFrom = (sq) => (game && game.legal[sq]) || [];
+const movesTo = (from, to) => movesFrom(from).filter(u => u.slice(2, 4) === to);
+let drag = null, promoOpen = false;
+
+function tryMove(from, to) {
+  const opts = movesTo(from, to);
+  if (!opts.length) return false;
+  selected = null;
+  if (opts.some(u => u.length === 5)) showPromotion(from, to);
+  else submitMove(opts[0]);
+  return true;
 }
+
+async function submitMove(uci) {
+  pendingMove = uci;
+  $("status").textContent = "Nemesis is thinking…";
+  render();
+  if (game.clock) {  // stop your clock now; Nemesis's runs while it thinks
+    const human = game.human;
+    game.clock[human] = clockLeft(human);
+    game.clock.running = human === "white" ? "black" : "white";
+    clockAt = performance.now();
+  }
+  try { game = await api(`/api/games/${game.id}/move`, { uci }); }
+  catch (e) { $("status").textContent = e.message; }
+  pendingMove = null;
+  update();
+}
+
+function showPromotion(from, to) {
+  promoOpen = true;
+  const white = game.human === "white";
+  const sqEl = document.querySelector(`#board [data-sq="${to}"]`);
+  const board = $("board"), b = board.getBoundingClientRect(), r = sqEl.getBoundingClientRect();
+  const atTop = r.top - b.top < b.height / 2;   // open downward from the top edge, upward from the bottom
+  const box = document.createElement("div");
+  box.className = "promo";
+  box.setAttribute("role", "dialog");
+  box.setAttribute("aria-label", "Promote to");
+  box.style.left = `${r.left - b.left}px`;
+  box.style[atTop ? "top" : "bottom"] = "0";
+  const names = { q: "Queen", r: "Rook", b: "Bishop", n: "Knight" };
+  const order = atTop ? ["q", "n", "r", "b"] : ["b", "r", "n", "q"];   // queen nearest the square
+  for (const k of order) {
+    const btn = document.createElement("button");
+    btn.innerHTML = `<span class="pc ${white ? "w" : "b"}">${GLYPH[k]}</span>`;
+    btn.title = btn.ariaLabel = names[k];
+    btn.onclick = (e) => { e.stopPropagation(); closePromotion(); submitMove(from + to + k); };
+    box.appendChild(btn);
+  }
+  board.appendChild(box);
+  box.querySelector("button" + (atTop ? ":first-child" : ":last-child")).focus();
+}
+
+function closePromotion() {
+  promoOpen = false;
+  document.querySelectorAll("#board .promo").forEach(x => x.remove());
+}
+
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && promoOpen) { closePromotion(); render(); }
+});
+document.addEventListener("pointerdown", (e) => {
+  if (promoOpen && !e.target.closest(".promo")) { closePromotion(); render(); }   // click away cancels
+}, true);
+
+function squareAt(x, y) {
+  const el = document.elementFromPoint(x, y);
+  return el && el.closest("#board .sq") ? el.closest("#board .sq").dataset.sq : null;
+}
+
+$("board").addEventListener("pointerdown", (e) => {
+  const sqEl = e.target.closest(".sq");
+  if (!sqEl || !canMove() || e.button > 0) return;
+  const name = sqEl.dataset.sq;
+  if (selected && selected !== name && tryMove(selected, name)) return;   // click-to-move
+  if (!movesFrom(name).length) { selected = null; render(); return; }
+  selected = name;
+  render();
+  drag = { from: name, x: e.clientX, y: e.clientY, ghost: null, over: null };
+  $("board").setPointerCapture(e.pointerId);
+  e.preventDefault();
+});
+
+$("board").addEventListener("pointermove", (e) => {
+  if (!drag) return;
+  if (!drag.ghost) {
+    if (Math.hypot(e.clientX - drag.x, e.clientY - drag.y) < 5) return;   // still a click
+    const src = document.querySelector(`#board [data-sq="${drag.from}"]`), pc = src.querySelector(".pc");
+    drag.ghost = pc.cloneNode(true);
+    drag.ghost.classList.add("ghost");
+    drag.ghost.style.fontSize = getComputedStyle(src).fontSize;
+    drag.ghost.style.width = drag.ghost.style.height = src.getBoundingClientRect().width + "px";
+    document.body.appendChild(drag.ghost);
+    src.classList.add("dragfrom");
+  }
+  drag.ghost.style.left = e.clientX + "px";
+  drag.ghost.style.top = e.clientY + "px";
+  const over = squareAt(e.clientX, e.clientY);
+  if (over !== drag.over) {
+    document.querySelectorAll("#board .sq.hover").forEach(x => x.classList.remove("hover"));
+    if (over && movesTo(drag.from, over).length) document.querySelector(`#board [data-sq="${over}"]`).classList.add("hover");
+    drag.over = over;
+  }
+});
+
+function endDrag(e, cancelled) {
+  if (!drag) return;
+  const d = drag;
+  drag = null;
+  if (!d.ghost) return;   // it was a click: the piece stays selected
+  d.ghost.remove();
+  const to = cancelled ? null : squareAt(e.clientX, e.clientY);
+  if (!(to && to !== d.from && tryMove(d.from, to))) render();   // not a legal square: snap back
+}
+$("board").addEventListener("pointerup", (e) => endDrag(e, false));
+$("board").addEventListener("pointercancel", (e) => endDrag(e, true));
 
 function update() {
   clockAt = performance.now(); flagSent = false;
