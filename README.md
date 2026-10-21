@@ -115,6 +115,17 @@ Nemesis is meant to be a challenge you can beat, not a wall.
   - **Current fit**, over 16 games per target at depth 10: at a 1400 target, Nemesis scored 62% against Stockfish at 1400, about 90 Elo strong. At a 2000 target, it scored 47% against Stockfish at 2000, about 20 Elo weak.
   - Stockfish can't play below 1320, so the 800–1100 settings are extrapolated.
 
+## Clocks and "does it work on you?"
+
+- **Time controls:** untimed, or bullet, blitz and rapid presets from 1 minute to 15 | 10. Nemesis plays on its own clock: when it's short on time it thinks less deeply, so it plays faster and a little weaker rather than ever losing on time. Running out of time loses, unless your opponent has nothing left to checkmate with, which makes it a draw. A game where nobody moved is aborted and isn't rated.
+- **Ratings per time control**, like Chess.com: bullet, blitz, rapid, classical and untimed. Each starts from your imported rating for that time control, if your imported games include one. Ratings from before v0.2 carry over as your untimed rating. The database is backed up automatically before it's upgraded.
+- **Does it work on you?** The Profile tab shows:
+  - how often Nemesis guessed your exact move, per game;
+  - how often you fell for its traps;
+  - how that compares with your mistake rate on other moves.
+
+  It's measured from what Nemesis predicted *during* each game, so retraining doesn't rewrite the history.
+
 ## Game review
 
 Any game can be reviewed: games played here and imported ones. In the web app, open the **Games** tab, or press **Review this game** when a game ends.

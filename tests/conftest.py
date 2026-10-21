@@ -18,7 +18,7 @@ class MaterialAnalyzer:
     def __init__(self):
         self._cache = {}
 
-    def lines(self, board, multipv=6, extra=()):
+    def lines(self, board, multipv=6, extra=(), depth=None):
         key = board.fen()
         if key not in self._cache:
             self._cache[key] = self._score_all(board)

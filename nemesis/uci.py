@@ -8,11 +8,12 @@ from typing import TextIO
 
 import chess
 
-from nemesis import commentary
+from nemesis import commentary, timecontrol
 from nemesis.engine import Nemesis
 from nemesis.search import Decision
 from nemesis.learn import record_game
 from nemesis.store import DEFAULT_DB, Store
+from nemesis.timecontrol import TimeControl
 
 OPTIONS = [
     "option name Player type string default <empty>",
@@ -40,6 +41,7 @@ class UCI:
         self.nemesis_color: chess.Color | None = None
         self.last: tuple[list[str], Decision] | None = None   # moves after Nemesis's last move, and why
         self.annotations: list[dict] = []                      # what Nemesis was thinking, for review
+        self.game_tc: TimeControl | None = None                # from the GUI's clocks, if timed
 
     def send(self, line: str) -> None:
         self.out.write(line + "\n")
@@ -90,11 +92,15 @@ class UCI:
             result = self.board.result(claim_draw=True)
             record_game(self.store, self.opts["player"], not self.nemesis_color, self.moves,
                         result=None if result == "*" else result, start_fen=self.start_fen,
-                        risk=int(self.opts["risk"]) / 100, annotations=self.annotations)
+                        risk=int(self.opts["risk"]) / 100, annotations=self.annotations,
+                        tc=self.game_tc)
             self.send("info string game recorded; run `nemesis train` to update the model")
         self.moves, self.nemesis_color = [], None
         self.last = None
         self.annotations = []
+        self.game_tc = None
+        if self.engine:
+            self.engine.tc = "untimed"
 
     def position(self, tokens: list[str]) -> None:
         if tokens[0] == "startpos":
@@ -120,19 +126,40 @@ class UCI:
             fallback = next(iter(self.board.legal_moves), None)
             self.send(f"bestmove {fallback.uci() if fallback else '0000'}")
 
+    def time_budget(self, args: dict) -> float | None:
+        """How long to think, from the GUI's clock info. Also notes the game's time control
+        (from the first timed `go`), so the result goes to the right rating."""
+        def secs(key: str) -> float | None:
+            v = args.get(key)
+            return int(v) / 1000 if v and v.lstrip("-").isdigit() else None
+        if (movetime := secs("movetime")) is not None:
+            return movetime
+        white = self.board.turn == chess.WHITE
+        own, inc = secs("wtime" if white else "btime"), secs("winc" if white else "binc") or 0.0
+        if own is None:
+            return None
+        if self.game_tc is None:
+            self.game_tc = TimeControl(round(own), inc)
+            if self.engine:
+                self.engine.tc = self.game_tc.category
+        return timecontrol.think_budget(own, inc)
+
     def search(self, tokens: list[str]) -> None:
         engine = self.ensure_engine()
         self.nemesis_color = self.board.turn
         args = dict(zip(tokens[::2], tokens[1::2]))
         human_ms = args.get("btime" if self.board.turn == chess.WHITE else "wtime")
         human_clock = int(human_ms) / 1000 if human_ms and human_ms.lstrip("-").isdigit() else None
+        budget = self.time_budget(args)
         if self.last and self.moves[:-1] == self.last[0] and len(self.moves) == len(self.last[0]) + 1:
             before = chess.Board(self.start_fen)
             for u in self.last[0]:
                 before.push_uci(u)
             for line in engine.react(before, self.last[1], chess.Move.from_uci(self.moves[-1])):
                 self.send(f"info string {line.replace('**', '')}")
-        decision = engine.choose(self.board, human_clock)
+            if self.annotations and self.last[1].reply:
+                self.annotations[-1]["reply"] = self.last[1].reply
+        decision = engine.choose(self.board, human_clock, budget=budget)
         best = decision.best
         self.send(f"info depth {engine.depth} score cp {best.cp} pv {best.uci}")
         for line in decision.lines:  # UCI info strings can't contain newlines: one per line

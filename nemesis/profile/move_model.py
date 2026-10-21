@@ -241,6 +241,8 @@ def train_player(store: Store, player: str, samples: list[Sample], l2: float = 4
         held = MoveModel().fit(train, prior=prior, l2=l2)
         metrics["holdout"] = evaluate(held, test)
         metrics["holdout_prior"] = evaluate(MoveModel(prior), test)
+        store.add_model_history(player, metrics["games"], metrics["holdout"]["top1"],
+                                metrics["holdout"]["top3"], metrics["holdout_prior"]["top1"])
     model = MoveModel().fit(samples, prior=prior, l2=l2)
     store.save_model(player, model.to_dict(), metrics)
     return model, metrics

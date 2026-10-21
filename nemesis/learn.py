@@ -9,13 +9,14 @@ from typing import Callable
 import chess
 import chess.pgn
 
-from nemesis import ratings
+from nemesis import ratings, timecontrol
 from nemesis.analysis.stockfish import Analyzer
 from nemesis.ingest.pgn import to_rows
 from nemesis.profile.move_model import MoveModel, build_samples, train_player, train_population
 from nemesis.profile.repertoire import OpeningTree
 from nemesis.profile.style import style_profile
 from nemesis.store import Store
+from nemesis.timecontrol import TimeControl
 
 
 def train(store: Store, player: str, analyzer: Analyzer, max_games: int | None = None,
@@ -40,12 +41,14 @@ def train_pooled(store: Store, analyzer: Analyzer, max_games_each: int | None = 
 
 def record_game(store: Store, player: str, player_color: chess.Color, moves: list[str],
                 result: str | None = None, start_fen: str = chess.STARTING_FEN,
-                risk: float | None = None, annotations: list[dict] | None = None) -> str | None:
+                risk: float | None = None, annotations: list[dict] | None = None,
+                tc: TimeControl | None = None, clocks: list[float] | None = None) -> str | None:
     """Store a game played against Nemesis so the next retrain learns from it.
 
     `result` is a PGN result ("1-0", "0-1", "1/2-1/2"). If it is None, it is taken from the board.
-    With `risk`, a decided game is also rated; `annotations` (Decision.annotation per Nemesis
-    move) are kept for the game review.
+    With `risk`, a decided game is also rated (in its time control's rating); `annotations`
+    (Decision.annotation per Nemesis move) are kept for the game review. `clocks` holds each
+    mover's remaining seconds after each move, so training sees how you play under time pressure.
     """
     if not moves:
         return None
@@ -54,15 +57,18 @@ def record_game(store: Store, player: str, player_color: chess.Color, moves: lis
     if start_fen != chess.STARTING_FEN:
         game.setup(board)
     node = game
-    for u in moves:
+    for i, u in enumerate(moves):
         move = chess.Move.from_uci(u)
         node = node.add_variation(move)
+        if clocks and i < len(clocks) and clocks[i] is not None:
+            node.set_clock(max(0.0, clocks[i]))
         board.push(move)
     if result is None:
         result = board.result(claim_draw=True)
     now = dt.datetime.now(dt.timezone.utc)
     game.headers.update({
-        "Event": "Nemesis", "Site": f"nemesis/{uuid.uuid4().hex[:12]}",
+        "Event": f"Nemesis {timecontrol.category(tc)}", "TimeControl": tc.pgn() if tc else "-",
+        "Site": f"nemesis/{uuid.uuid4().hex[:12]}",
         "White": player if player_color == chess.WHITE else "Nemesis",
         "Black": player if player_color == chess.BLACK else "Nemesis",
         "Result": result, "UTCDate": now.strftime("%Y.%m.%d"), "UTCTime": now.strftime("%H:%M:%S"),
@@ -78,5 +84,5 @@ def record_game(store: Store, player: str, player_color: chess.Color, moves: lis
     if annotations:
         store.put_json("annotations", row.id, {"risk": risk, "moves": annotations})
     if risk is not None and row.result is not None:
-        ratings.update_after_game(store, row.id, player, risk, row.result)
+        ratings.update_after_game(store, row.id, player, risk, row.result, timecontrol.category(tc))
     return row.id

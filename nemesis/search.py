@@ -14,6 +14,7 @@ With a strength target (Elo), the final choice is sampled instead (see strength.
 from __future__ import annotations
 
 import random
+import time
 from dataclasses import dataclass, field
 
 import chess
@@ -64,6 +65,7 @@ class Decision:
     elo: float | None = None      # strength target it played at (None = unlimited)
     top_scored: str = ""          # the move the unlimited search would have played
     lapse: bool = False           # a deliberate human-style slip at this strength
+    reply: dict | None = None     # the human's answer once known: {"uci", "loss"}
 
     @property
     def best(self) -> Candidate:
@@ -90,7 +92,8 @@ class Decision:
 class Searcher:
     def __init__(self, analyzer: Analyzer, model: MoveModel, tree: OpeningTree | None = None,
                  risk: float = 0.5, multipv: int = 6, root_multipv: int = 8, deep: bool = False,
-                 elo: float | None = None, rng: random.Random | None = None):
+                 elo: float | None = None, rng: random.Random | None = None,
+                 depth: int | None = None, deadline: float | None = None):
         self.analyzer = analyzer
         self.model = model
         self.tree = tree
@@ -100,11 +103,21 @@ class Searcher:
         self.deep = deep
         self.elo = elo if strength.limited(elo) else None
         self.rng = rng or random.Random()
+        self.depth = depth          # Stockfish depth override (shallower when short on time)
+        self.deadline = deadline    # time.monotonic() by which a move must be chosen
+
+    def _lines(self, board: chess.Board, multipv: int, extra=()) -> dict[str, int]:
+        if self.depth is None:
+            return self.analyzer.lines(board, multipv=multipv, extra=extra)
+        return self.analyzer.lines(board, multipv=multipv, extra=extra, depth=self.depth)
+
+    def out_of_time(self) -> bool:
+        return self.deadline is not None and time.monotonic() > self.deadline
 
     # -- the human's turn ---------------------------------------------------
     def human_replies(self, board: chess.Board, clock: float | None = None) -> list[Reply]:
         """Predicted distribution over the human's moves, with an eval for each."""
-        lines = self.analyzer.lines(board, multipv=self.multipv)
+        lines = self._lines(board, self.multipv)
         best = max(lines.values()) if lines else 0
         ctx = Context(clock=clock, best_cp=best)
         losses = impute_losses(board, lines)
@@ -113,8 +126,8 @@ class Searcher:
         # Likely moves Stockfish didn't rank are where blunders hide: evaluate them properly.
         unknown = [moves[i].uci() for i in p.argsort()[::-1][:6]
                    if p[i] >= 0.03 and moves[i].uci() not in lines]
-        if unknown:
-            lines = self.analyzer.lines(board, multipv=self.multipv, extra=unknown)
+        if unknown and not self.out_of_time():
+            lines = self._lines(board, self.multipv, extra=unknown)
             best = max(lines.values())
             losses = impute_losses(board, lines)
             moves, X = position_features(board, losses, self.tree, ctx)
@@ -152,7 +165,7 @@ class Searcher:
         term = terminal_cp(board)
         if term is not None:
             return win_prob(term)
-        lines = self.analyzer.lines(board, multipv=3)
+        lines = self._lines(board, 3)
         best = max(lines.values())
         out = 0.0
         for u, cp in lines.items():
@@ -177,7 +190,7 @@ class Searcher:
     # -- Nemesis's turn (root) ----------------------------------------------
     def choose(self, board: chess.Board, human_clock: float | None = None) -> Decision:
         multipv = 12 if self.elo else self.root_multipv
-        lines = self.analyzer.lines(board, multipv=multipv)
+        lines = self._lines(board, multipv)
         if not lines:
             raise ValueError("no legal moves")
         best = max(lines.values())
@@ -186,9 +199,11 @@ class Searcher:
             window = max(window, strength.WINDOW)
         depth = 2 if self.deep else 1
         cands: list[Candidate] = []
-        for u, cp in lines.items():
+        for u, cp in sorted(lines.items(), key=lambda kv: -kv[1]):  # best first, in case time runs out
             if best - cp > window:
                 continue
+            if cands and self.out_of_time():
+                break
             move = chess.Move.from_uci(u)
             san = board.san(move)
             board.push(move)

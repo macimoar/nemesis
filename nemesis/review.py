@@ -12,6 +12,7 @@ from typing import Callable
 
 import chess
 
+from nemesis import ratings
 from nemesis.analysis.stockfish import Analyzer, win_prob
 from nemesis.commentary import _pawns, describe_move
 from nemesis.features import VALUE, en_prise
@@ -253,10 +254,11 @@ def rating_changes(store: Store, game_id: str) -> dict | None:
         return None
     out = {}
     for entity, (before, after) in changes.items():
-        key = "you" if entity.startswith("player:") else "nemesis"
-        out[key] = {"before": round(before), "after": round(after), "change": round(after - before)}
-        if key == "nemesis":
-            out[key]["tier"] = entity.rsplit(":", 1)[-1]
+        info = ratings.parse_entity(entity)
+        out[info["kind"] if info["kind"] == "nemesis" else "you"] = {
+            "before": round(before), "after": round(after), "change": round(after - before),
+            "tc": info["tc"], **({"tier": info["tier"]} if "tier" in info else {}),
+        }
     return out
 
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import random
+import time
 
 import chess
 
@@ -14,11 +15,25 @@ from nemesis.search import Decision, Searcher
 from nemesis.store import Store
 
 
+def search_settings(budget: float | None, deep: bool) -> tuple[int | None, int, int, bool]:
+    """(Stockfish depth, MultiPV for your replies, MultiPV at the root, deep) for a time budget.
+    Less time means a shallower, narrower search: faster and a little weaker, never a loss on time."""
+    if budget is None or budget >= 5:
+        return None, 6, 8, deep
+    if budget >= 2.5:
+        return 8, 6, 8, False
+    if budget >= 1:
+        return 6, 5, 6, False
+    return 4, 4, 4, False
+
+
 class Nemesis:
     def __init__(self, store: Store, player: str, risk: float = 0.5, depth: int = 10,
                  deep: bool = False, analyzer: Analyzer | None = None, stockfish_path: str | None = None,
-                 mode: str = commentary.XRAY, elo: float | None = None, seed: int | None = None):
+                 mode: str = commentary.XRAY, elo: float | None = None, seed: int | None = None,
+                 tc: str = "untimed"):
         self.store = store
+        self.tc = tc                  # time-control category: which rating "match me" uses
         self.fixed_elo = elo          # None or 0: "match me" (your rating + 50)
         self.rng = random.Random(seed)
         self.mode = commentary.normalise_mode(mode)
@@ -37,20 +52,26 @@ class Nemesis:
     def reload(self) -> None:
         self.set_player(self.player)
 
-    def choose(self, board: chess.Board, human_clock: float | None = None) -> Decision:
-        searcher = Searcher(self.analyzer, self.model, self.tree, risk=self.risk, deep=self.deep,
-                            elo=self.target_elo(), rng=self.rng)
+    def choose(self, board: chess.Board, human_clock: float | None = None,
+               budget: float | None = None) -> Decision:
+        """Pick a move. `budget`: seconds Nemesis may think (from its own clock), None = no limit."""
+        depth, multipv, root_multipv, deep = search_settings(budget, self.deep)
+        searcher = Searcher(self.analyzer, self.model, self.tree, risk=self.risk, deep=deep,
+                            elo=self.target_elo(), rng=self.rng, depth=depth,
+                            multipv=multipv, root_multipv=root_multipv,
+                            deadline=None if budget is None else time.monotonic() + 0.8 * budget)
         decision = searcher.choose(board, human_clock)
         decision.lines = commentary.before(board, decision, self.mode)
         return decision
 
     def target_elo(self) -> float:
-        return ratings.target_elo(self.store, self.player, self.fixed_elo)
+        return ratings.target_elo(self.store, self.player, self.fixed_elo, self.tc)
 
     def react(self, board: chess.Board, decision: Decision, reply: chess.Move) -> list[str]:
         """Comment on the human's reply. `board` is the position after Nemesis's move."""
         lines = self.analyzer.lines(board, extra=[reply.uci()])
         loss = impute_losses(board, lines).get(reply.uci(), 0)
+        decision.reply = {"uci": reply.uci(), "loss": loss}   # kept for "does it work on you?"
         return commentary.react(board, decision, reply, loss, self.mode)
 
     def close(self) -> None:

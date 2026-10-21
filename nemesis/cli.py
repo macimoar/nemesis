@@ -117,6 +117,7 @@ def cmd_play(args: argparse.Namespace) -> None:
                         continue
                 if decision is not None:
                     say(nem.react(board, decision, move))
+                    annotations[-1]["reply"] = decision.reply
             else:
                 decision = nem.choose(board)
                 move = decision.move

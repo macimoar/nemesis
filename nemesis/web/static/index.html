@@ -87,6 +87,24 @@
   .tabs button.on { color: var(--ink); border-color: var(--accent); }
   .hidden { display: none; }
   .progress { height: 4px; background: var(--line); border-radius: 2px; overflow: hidden; margin-top: 8px; }
+  .clock { display: flex; justify-content: space-between; align-items: center; margin: 8px 0;
+           padding: 6px 12px; border-radius: 8px; background: var(--bg); border: 1px solid var(--line); }
+  .clock .who { color: var(--muted); font-size: 14px; }
+  .clock .time { font: 600 22px/1.2 ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-variant-numeric: tabular-nums; }
+  .clock.running { background: var(--panel); border-color: var(--ink); }
+  .clock.running .who { color: var(--ink); }
+  .clock.low .time { color: var(--accent); }
+  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin: 10px 0; }
+  .tile { padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; }
+  .tile .k { color: var(--muted); font-size: 13px; }
+  .tile .v { font-size: 26px; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .tile .s { color: var(--muted); font-size: 12px; }
+  .chartwrap { position: relative; margin-top: 6px; }
+  .chartwrap svg { width: 100%; height: 160px; display: block; overflow: visible; }
+  .chartwrap .grid line { stroke: var(--line); }
+  .chartwrap .axis text { fill: var(--muted); font-size: 11px; }
+  .tip { position: absolute; pointer-events: none; background: var(--panel); color: var(--ink); border: 1px solid var(--line);
+         border-radius: 8px; padding: 6px 8px; font-size: 12px; box-shadow: 0 4px 14px rgba(0,0,0,.15); white-space: nowrap; }
   .strip { display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: baseline; margin-top: 12px; font-size: 14px; }
   .strip b { font-variant-numeric: tabular-nums; }
   .strip .delta.up { color: var(--good); } .strip .delta.down { color: var(--accent); }
@@ -171,6 +189,16 @@
       <span id="risklabel" class="muted"></span>
     </div>
     <div class="row">
+      <label>Time <select id="tc">
+        <option value="">Untimed</option>
+        <option value="1+0">1 min · Bullet</option>
+        <option value="2+1">2 | 1 · Bullet</option>
+        <option value="3+0">3 min · Blitz</option>
+        <option value="3+2">3 | 2 · Blitz</option>
+        <option value="5+0">5 min · Blitz</option>
+        <option value="10+0">10 min · Rapid</option>
+        <option value="15+10">15 | 10 · Rapid</option>
+      </select></label>
       <label>Strength <select id="strength">
         <option value="0">Match me (your rating + 50)</option>
       </select></label>
@@ -182,7 +210,9 @@
       </select></label>
     </div>
     <div id="strip" class="strip"></div>
+    <div id="clock-top" class="clock hidden"><span class="who">Nemesis</span><span class="time"></span></div>
     <div style="margin-top:12px"><div id="board" class="board"></div></div>
+    <div id="clock-bottom" class="clock hidden"><span class="who">You</span><span class="time"></span></div>
     <div id="playbar">
       <div class="row">
         <button id="resign" class="ghost" disabled>Resign</button>
@@ -321,6 +351,12 @@ async function click(name) {
     selected = null;
     $("status").textContent = "Nemesis is thinking…";
     game.last = uci; render();
+    if (game.clock) {  // stop your clock now; Nemesis's runs while it thinks
+      const human = game.human;
+      game.clock[human] = clockLeft(human);
+      game.clock.running = human === "white" ? "black" : "white";
+      clockAt = performance.now();
+    }
     try { game = await api(`/api/games/${game.id}/move`, { uci }); }
     catch (e) { $("status").textContent = e.message; }
     update();
@@ -331,6 +367,7 @@ async function click(name) {
 }
 
 function update() {
+  clockAt = performance.now(); flagSent = false;
   render();
   const log = $("log"); log.innerHTML = "";
   for (const m of [...game.log].reverse()) {
@@ -341,7 +378,7 @@ function update() {
     log.appendChild(d);
   }
   $("resign").disabled = game.finished;
-  $("status").textContent = game.finished ? `Game over: ${game.result}` : (game.turn === game.human ? "Your move." : "Nemesis is thinking…");
+  $("status").textContent = game.finished ? (game.result === "*" ? game.reason : `Game over: ${game.result}${game.reason ? ". " + game.reason : ""}`) : (game.turn === game.human ? "Your move." : "Nemesis is thinking…");
   $("commentary").value = game.commentary;
   $("reviewgame").classList.toggle("hidden", !(game.finished && game.game_id));
   renderStrip(game.ratings, game.tier, game.elo);
@@ -473,6 +510,7 @@ async function loadProfile(player) {
     <p class="muted">${p.games} games · ${p.moves_analysed} moves analysed · overall score ${pct(p.score)}</p>
     ${h ? `<p>On your newest games, Nemesis predicts your exact move <b>${pct(h.top1)}</b> of the time (top 3: ${pct(h.top3)}).
       A generic player model gets ${pct(pr.top1)}; "you'll play Stockfish's move" gets ${pct(h.stockfish_top1)}.</p>` : ""}
+    <div id="insights"></div>
     <div class="grid2">
       <div><h3>What sets you apart</h3>${traits}</div>
       <div>
@@ -493,6 +531,7 @@ async function loadProfile(player) {
     ${openings ? `<h3>Openings</h3><table><tr><th>Opening</th><th class="n">games</th><th class="n">score</th></tr>${openings}</table>` : ""}
     ${weak ? `<p><b>Where Nemesis will take you:</b> ${weak}</p>` : ""}
     <div class="row"><button class="ghost" id="retrain">Retrain</button></div>`;
+  renderInsights(player);
   $("retrain").onclick = async () => { const { job } = await api(`/api/train/${encodeURIComponent(player)}`, {}); watchJob(job); showTab("import"); };
 }
 
@@ -536,7 +575,7 @@ $("newgame").onclick = async () => {
   flipped = $("color").value === "black";
   selected = null;
   $("status").textContent = "Starting…";
-  try { game = await api("/api/games", { player, color: $("color").value, risk: $("risk").value / 100, commentary: $("commentary").value, elo: +$("strength").value || null }); update(); }
+  try { game = await api("/api/games", { player, color: $("color").value, risk: $("risk").value / 100, commentary: $("commentary").value, elo: +$("strength").value || null, tc: $("tc").value || null }); update(); }
   catch (e) { $("status").textContent = e.message; }
 };
 $("resign").onclick = async () => { if (game) { game = await api(`/api/games/${game.id}/resign`, {}); update(); } };
@@ -548,9 +587,18 @@ $("flip").onclick = () => { flipped = !flipped; render(); };
 const TIER_NAMES = { sound: "Sound", steering: "Steering", trapper: "Trapper", hustler: "Hustler" };
 function tierOf(risk) { return risk < .2 ? "sound" : risk < .6 ? "steering" : risk < .85 ? "trapper" : "hustler"; }
 
+// Same rule as the server (Lichess's): estimated length = base + 40 × increment.
+function tcCategory(value) {
+  if (!value) return "untimed";
+  const [m, inc] = value.split("+").map(Number), est = m * 60 + 40 * (inc || 0);
+  return est < 180 ? "bullet" : est < 480 ? "blitz" : est < 1500 ? "rapid" : "classical";
+}
+const TC_NAMES = { bullet: "Bullet", blitz: "Blitz", rapid: "Rapid", classical: "Classical", untimed: "Untimed" };
+
 async function loadRatings(player) {
   if (!player || (game && !game.finished)) return;
-  try { renderStrip(await api(`/api/ratings/${encodeURIComponent(player)}`), tierOf($("risk").value / 100), null); }
+  const tc = tcCategory($("tc").value);
+  try { renderStrip(await api(`/api/ratings/${encodeURIComponent(player)}?tc=${tc}`), tierOf($("risk").value / 100), null); }
   catch (e) { $("strip").innerHTML = ""; }
 }
 
@@ -561,7 +609,7 @@ function renderStrip(r, tier, elo) {
   const last = r.history && r.history[0];
   const delta = last && game && game.finished ? Math.round(last.after - last.before) : null;
   const d = delta == null ? "" : ` <span class="delta ${delta >= 0 ? "up" : "down"}">${delta >= 0 ? "+" : ""}${delta}</span>`;
-  $("strip").innerHTML = `<span>You <b>${r.player.rating}</b>${q(r.player.provisional)}${d}
+  $("strip").innerHTML = `<span class="muted">${TC_NAMES[r.tc] || ""}</span><span>You <b>${r.player.rating}</b>${q(r.player.provisional)}${d}
       ${r.player.seeded_from_imports ? '<span class="muted">(from your imports)</span>' : ""}</span>
     <span>Nemesis · ${TIER_NAMES[t.tier]} <b>${t.rating}</b>${q(t.provisional)}</span>
     ${elo ? `<span class="muted">playing at ~${elo}</span>` : ""}`;
@@ -713,6 +761,116 @@ $("strength").onchange = async () => {
   if (game && !game.finished) { game = await api(`/api/games/${game.id}/elo`, { elo: +$("strength").value || null }); update(); }
 };
 $("risk").addEventListener("change", () => { if (!game || game.finished) loadRatings($("player").value); });
+
+// ---------------------------------------------------------------------------
+// Does it work on you?
+// ---------------------------------------------------------------------------
+async function renderInsights(player) {
+  let d;
+  try { d = await api(`/api/insights/${encodeURIComponent(player)}`); } catch (e) { return; }
+  const el = $("insights");
+  if (!el) return;
+  if (!d.games) {
+    el.innerHTML = `<h3>Does it work on you?</h3><p class="muted">Play a few games against Nemesis and this fills in:
+      how often it predicts your exact move, and whether its traps catch you more often than your ordinary mistakes.</p>`;
+    return;
+  }
+  const tile = (k, v, sub) => `<div class="tile"><div class="k">${k}</div><div class="v">${v}</div><div class="s">${sub}</div></div>`;
+  let verdict = `<p class="muted">Not enough traps yet to judge whether they work (${d.traps} so far; it needs 5).</p>`;
+  if (d.verdict === "traps") verdict = `<p><b>Its traps work on you.</b> When Nemesis set one, you fell for it ${pct(d.trap_rate)} of the time,
+      compared with a ${pct(d.mistake_rate)} mistake rate on your other moves.</p>`;
+  else if (d.verdict === "even") verdict = `<p><b>Its traps aren't beating you yet.</b> You fell for ${pct(d.trap_rate)} of them, about the same
+      as your ${pct(d.mistake_rate)} mistake rate on other moves. The more you play, the better it learns what catches you.</p>`;
+  else if (d.verdict === "worse") verdict = `<p><b>You're reading its traps.</b> You fell for only ${pct(d.trap_rate)} of them,
+      less often than your ${pct(d.mistake_rate)} mistake rate on other moves.</p>`;
+  const train = d.training.length ? d.training[d.training.length - 1] : null;
+  el.innerHTML = `<h3>Does it work on you?</h3>
+    <div class="tiles">
+      ${tile("Guessed your exact move", pct(d.prediction_rate), `${d.predicted} of ${d.predictions} moves, ${d.games} game${d.games > 1 ? "s" : ""}`)}
+      ${tile("Traps you fell for", d.traps ? `${d.sprung} of ${d.traps}` : "–", d.traps ? `${pct(d.trap_rate)} of traps set` : "none set yet")}
+      ${tile("Mistakes on other moves", pct(d.mistake_rate), "replies losing a pawn or more")}
+    </div>
+    ${verdict}
+    <div class="k muted" style="font-size:13px;margin-top:8px">Moves Nemesis guessed exactly, per game</div>
+    <div class="chartwrap" id="ins-chart"></div>
+    ${train ? `<p class="muted" style="font-size:13px">Last training: on your newest imported games it guessed ${pct(train.top1)}
+      of moves, against ${pct(train.baseline)} for a generic player model.</p>` : ""}`;
+  drawInsightsChart(d.per_game);
+}
+
+function drawInsightsChart(rows) {
+  const wrap = $("ins-chart"), W = 600, H = 160, L = 34, R = 8, T = 8, B = 22;
+  const n = rows.length, x = (i) => n === 1 ? (L + W - R) / 2 : L + (i / (n - 1)) * (W - L - R);
+  const y = (v) => T + (1 - v) * (H - T - B);
+  const grid = [0, .25, .5, .75, 1].map(v => `<line x1="${L}" x2="${W - R}" y1="${y(v)}" y2="${y(v)}"/>`).join("");
+  const labels = [0, .5, 1].map(v => `<text x="${L - 6}" y="${y(v) + 4}" text-anchor="end">${v * 100}%</text>`).join("");
+  const pts = rows.map((r, i) => `${x(i)},${y(r.rate)}`).join(" ");
+  const dots = rows.map((r, i) => `<circle cx="${x(i)}" cy="${y(r.rate)}" r="4" fill="var(--accent)" stroke="var(--panel)" stroke-width="2"/>`).join("");
+  wrap.innerHTML = `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img"
+      aria-label="Share of your moves Nemesis guessed exactly, per game">
+    <g class="grid">${grid}</g><g class="axis">${labels}
+      <text x="${L}" y="${H - 4}">first game</text><text x="${W - R}" y="${H - 4}" text-anchor="end">latest</text></g>
+    ${n > 1 ? `<polyline points="${pts}" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linejoin="round"/>` : ""}
+    ${dots}<line id="ins-cross" y1="${T}" y2="${H - B}" stroke="var(--muted)" stroke-dasharray="3 3" visibility="hidden"/>
+    <rect x="${L}" y="0" width="${W - L - R}" height="${H}" fill="transparent" id="ins-hit"/></svg>
+    <div class="tip hidden" id="ins-tip"></div>`;
+  const svg = wrap.querySelector("svg"), tip = $("ins-tip"), cross = $("ins-cross");
+  const res = (r) => r === 1 ? "won" : r === 0 ? "lost" : r === 0.5 ? "drew" : "unfinished";
+  $("ins-hit").onmousemove = (e) => {
+    const b = svg.getBoundingClientRect(), vx = (e.clientX - b.left) / b.width * W;
+    const i = n === 1 ? 0 : Math.max(0, Math.min(n - 1, Math.round((vx - L) / (W - L - R) * (n - 1))));
+    const r = rows[i], px = x(i) / W * b.width;
+    cross.setAttribute("x1", x(i)); cross.setAttribute("x2", x(i)); cross.setAttribute("visibility", "visible");
+    tip.innerHTML = `<b>${pct(r.rate)}</b> guessed (${r.predicted} of ${r.moves})<br>${escapeHtml(r.date)} · you ${res(r.result)}` +
+      (r.traps ? `<br>traps: fell for ${r.sprung} of ${r.traps}` : "");
+    tip.classList.remove("hidden");
+    tip.style.left = Math.min(Math.max(0, px - tip.offsetWidth / 2), b.width - tip.offsetWidth) + "px";
+    tip.style.top = (y(r.rate) / H * b.height - tip.offsetHeight - 10) + "px";
+  };
+  $("ins-hit").onmouseleave = () => { tip.classList.add("hidden"); cross.setAttribute("visibility", "hidden"); };
+}
+
+// ---------------------------------------------------------------------------
+// Clocks: the server keeps time; the page counts down between updates.
+// ---------------------------------------------------------------------------
+let clockAt = performance.now(), flagSent = false;
+
+function clockLeft(color) {
+  const c = game.clock;
+  return Math.max(0, c[color] - (c.running === color ? (performance.now() - clockAt) / 1000 : 0));
+}
+
+function fmtClock(t) {
+  if (t < 10) return t.toFixed(1);
+  const m = Math.floor(t / 60), sec = Math.floor(t % 60);
+  return `${m}:${String(sec).padStart(2, "0")}`;
+}
+
+function tickClocks() {
+  const show = !!(game && game.clock && !review);
+  for (const id of ["clock-top", "clock-bottom"]) $(id).classList.toggle("hidden", !show);
+  if (!show) return;
+  const top = flipped ? "white" : "black", bottom = flipped ? "black" : "white";
+  for (const [id, color] of [["clock-top", top], ["clock-bottom", bottom]]) {
+    const t = clockLeft(color), el = $(id);
+    el.querySelector(".who").textContent = color === game.human ? "You" : "Nemesis";
+    el.querySelector(".time").textContent = fmtClock(t);
+    el.classList.toggle("running", game.clock.running === color);
+    el.classList.toggle("low", t < 20);
+  }
+  const human = game.human;
+  if (!game.finished && game.clock.running === human && clockLeft(human) <= 0 && !flagSent) {
+    flagSent = true;  // the server confirms and ends the game
+    api(`/api/games/${game.id}/flag`, {}).then(g => { game = g; update(); }).catch(() => { flagSent = false; });
+  }
+}
+setInterval(tickClocks, 100);
+
+try { const saved = localStorage.getItem("nemesis-tc"); if (saved !== null) $("tc").value = saved; } catch (e) {}
+$("tc").onchange = () => {
+  try { localStorage.setItem("nemesis-tc", $("tc").value); } catch (e) {}
+  loadRatings($("player").value);
+};
 
 riskLabel(); render(); loadPlayers();
 </script>

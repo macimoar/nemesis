@@ -12,16 +12,18 @@ tier, game review, and a download-and-run app for Windows, macOS and Linux.
 
 Close the gaps between what's built and how you actually play.
 
-- **Time controls and a clock.** Bullet, blitz and rapid in the web app. Nemesis
-  already models how you play under time pressure; a clock makes that matter.
-  Ratings are kept per time control.
+- ✅ **Time controls and a clock.** Bullet, blitz and rapid in the web app, with
+  ratings kept per time control. Nemesis has its own clock and budgets its thinking
+  so it never loses on time. Clock times are saved with each game, so training
+  learns how you play under time pressure.
 - **Board basics:** promotion picker (pawns currently always promote to a queen),
   drag-and-drop moves, move sounds, draw offers, and downloading a game as PGN.
 - **Faster learning:** after a game, Nemesis analyses only the new game instead of
   retraining from scratch. Retraining takes seconds instead of minutes.
-- **"Does it work on you?"** The profile shows how often Nemesis predicted your
-  move, over time, and whether its traps beat you more often than chance. This is
-  the real test of the whole idea, and it decides the order of everything below.
+- ✅ **"Does it work on you?"** The profile shows how often Nemesis guessed your
+  exact move, game by game, and whether you fall for its traps more often than you
+  make mistakes on other moves. This is the real test of the whole idea, and it
+  decides the order of everything below.
 
 ## v0.3 — From nemesis to coach
 

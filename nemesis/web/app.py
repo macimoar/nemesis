@@ -18,13 +18,15 @@ from pydantic import BaseModel
 
 from nemesis.analysis.install import ensure_stockfish
 from nemesis.analysis.stockfish import StockfishAnalyzer
-from nemesis import commentary, ratings
+from nemesis import commentary, ratings, timecontrol
 from nemesis.engine import Nemesis
 from nemesis.search import Decision
 from nemesis.features import STYLE_TEXT
+from nemesis.insights import insights
 from nemesis.learn import record_game, train
 from nemesis.review import cached_review, rating_changes, review_game
 from nemesis.store import DEFAULT_DB, Store
+from nemesis.timecontrol import TimeControl
 
 STATIC = Path(__file__).parent / "static"
 
@@ -62,6 +64,7 @@ class NewGameReq(BaseModel):
     deep: bool = False
     commentary: str = "xray"  # xray | poker
     elo: int | None = None    # Nemesis's strength; None/0 = "match me" (your rating + 50)
+    tc: str | None = None     # time control preset, e.g. "3+2"; None = untimed
 
 
 class MoveReq(BaseModel):
@@ -103,6 +106,19 @@ class Game:
     pending: Decision | None = None   # Nemesis's last decision, kept to react to the human's reply
     annotations: list[dict] = field(default_factory=list)   # what Nemesis was thinking, for review
     game_id: str | None = None        # id in the store once finished
+    tc: TimeControl | None = None     # None = untimed
+    clock: dict = field(default_factory=dict)        # colour -> seconds left (timed games)
+    turn_started: float = 0.0                        # time.monotonic() when the side to move began
+    clocks: list = field(default_factory=list)       # mover's seconds left after each move
+    reason: str = ""                                 # how it ended, when not by the board
+
+    def time_left(self, color: chess.Color) -> float | None:
+        if not self.tc:
+            return None
+        left = self.clock[color]
+        if not self.finished and self.board.turn == color:
+            left -= time.monotonic() - self.turn_started
+        return max(0.0, left)
 
 
 def create_app(db: str | Path = DEFAULT_DB, depth: int = 10) -> FastAPI:
@@ -176,23 +192,59 @@ def create_app(db: str | Path = DEFAULT_DB, depth: int = 10) -> FastAPI:
             "legal": legal, "log": g.log, "finished": g.finished, "result": g.result,
             "risk": g.engine.risk, "check": g.board.is_check(), "commentary": g.engine.mode,
             "tier": ratings.tier(g.engine.risk), "elo": round(g.engine.target_elo()),
-            "fixed_elo": g.engine.fixed_elo, "ratings": ratings.summary(store, g.player),
-            "game_id": g.game_id,
+            "fixed_elo": g.engine.fixed_elo, "ratings": ratings.summary(store, g.player, g.engine.tc),
+            "game_id": g.game_id, "reason": g.reason,
+            "clock": None if not g.tc else {
+                "white": g.time_left(chess.WHITE), "black": g.time_left(chess.BLACK),
+                "running": None if g.finished else ("white" if g.board.turn == chess.WHITE else "black"),
+                "label": g.tc.label, "category": g.tc.category,
+            },
         }
+
+    def end_move_clock(g: Game, color: chess.Color) -> bool:
+        """Charge the mover's thinking time and add the increment. False if they ran out."""
+        if not g.tc:
+            g.clocks.append(None)
+            return True
+        left = g.time_left(color)
+        if left <= 0:
+            return False
+        g.clock[color] = left + g.tc.increment
+        g.clocks.append(g.clock[color])
+        g.turn_started = time.monotonic()
+        return True
+
+    def out_of_time(g: Game, color: chess.Color) -> None:
+        g.clock[color] = 0.0
+        # Running out loses, unless the opponent has nothing left to checkmate with.
+        draw = g.board.has_insufficient_material(not color)
+        result = "1/2-1/2" if draw else ("0-1" if color == chess.WHITE else "1-0")
+        who = "You" if color == g.human else "Nemesis"
+        g.reason = f"{who} ran out of time" + (", but the other side can't checkmate: draw." if draw else ".")
+        finish(g, result)
 
     def finish(g: Game, result: str) -> None:
         g.finished, g.result = True, result
         # Rate against the tier Nemesis mostly played at (the risk can change mid-game).
         risks = [a["risk"] for a in g.annotations] or [g.engine.risk]
         g.game_id = record_game(store, g.player, g.human, [m.uci() for m in g.board.move_stack],
-                                result=result, risk=sum(risks) / len(risks), annotations=g.annotations)
+                                result=result, risk=sum(risks) / len(risks), annotations=g.annotations,
+                                tc=g.tc, clocks=g.clocks)
+        if g.game_id is None:  # no moves were played: aborted, like on Chess.com
+            g.result = "*"
+            lines = [f"{g.reason + ' ' if g.reason else ''}No moves were played, so the game was aborted and isn't rated."]
+            g.reason = "Aborted: no moves were played."
+            g.log.append({"who": "nemesis", "kind": "info", "lines": lines})
+            return
         job = Job(id=uuid.uuid4().hex[:8], kind="learn", player=g.player)
         jobs[job.id] = job
-        lines = [f"Game over ({result}). I'm studying this one."]
-        change = store.rating_change(g.game_id) if g.game_id else {}
+        lines = [f"Game over ({result}). {g.reason + ' ' if g.reason else ''}I'm studying this one."]
+        change = store.rating_change(g.game_id)
         for entity, (before, after) in change.items():
-            name = "Your rating" if entity.startswith("player:") else \
-                f"My rating ({ratings.TIER_LABEL[entity.rsplit(':', 1)[-1]]})"
+            info = ratings.parse_entity(entity)
+            tc_name = timecontrol.LABELS[info["tc"]].lower()
+            name = f"Your {tc_name} rating" if info["kind"] == "player" else \
+                f"My {tc_name} rating ({ratings.TIER_LABEL[info['tier']]})"
             lines.append(f"{name}: {before:.0f} → {after:.0f} ({after - before:+.0f}).")
         g.log.append({"who": "nemesis", "kind": "info", "lines": lines})
         run_job(job, train_job)
@@ -201,9 +253,15 @@ def create_app(db: str | Path = DEFAULT_DB, depth: int = 10) -> FastAPI:
         if g.board.is_game_over(claim_draw=True):
             finish(g, g.board.result(claim_draw=True))
             return
-        decision = g.engine.choose(g.board)
+        me = g.board.turn
+        g.turn_started = time.monotonic()
+        budget = timecontrol.think_budget(g.time_left(me), g.tc.increment) if g.tc else None
+        decision = g.engine.choose(g.board, human_clock=g.time_left(g.human), budget=budget)
         san = g.board.san(decision.move)
         g.annotations.append(decision.annotation(len(g.board.move_stack), g.engine.risk))
+        if not end_move_clock(g, me):
+            out_of_time(g, me)
+            return
         g.board.push(decision.move)
         g.pending = decision
         entry = {"who": "nemesis", "kind": "move", "san": san, "lines": decision.lines}
@@ -297,10 +355,14 @@ def create_app(db: str | Path = DEFAULT_DB, depth: int = 10) -> FastAPI:
 
     @app.post("/api/games")
     def new_game(req: NewGameReq) -> dict:
+        tc = timecontrol.parse(req.tc)
         engine = Nemesis(store, req.player, risk=req.risk, deep=req.deep, analyzer=get_analyzer(),
-                         mode=req.commentary, elo=req.elo or None)
+                         mode=req.commentary, elo=req.elo or None, tc=timecontrol.category(tc))
         human = chess.WHITE if req.color == "white" else chess.BLACK
-        g = Game(id=uuid.uuid4().hex[:10], player=req.player.lower(), human=human, engine=engine)
+        g = Game(id=uuid.uuid4().hex[:10], player=req.player.lower(), human=human, engine=engine, tc=tc)
+        if tc:
+            g.clock = {chess.WHITE: tc.base, chess.BLACK: tc.base}
+        g.turn_started = time.monotonic()
         games[g.id] = g
         if g.board.turn != human:
             nemesis_turn(g)
@@ -327,12 +389,25 @@ def create_app(db: str | Path = DEFAULT_DB, depth: int = 10) -> FastAPI:
             raise HTTPException(400, "bad move") from None
         if move not in g.board.legal_moves:
             raise HTTPException(400, "illegal move")
+        if not end_move_clock(g, g.human):   # the move arrived after the flag fell
+            out_of_time(g, g.human)
+            return state(g)
         g.log.append({"who": "you", "san": g.board.san(move)})
         if g.pending is not None:
             g.log.append({"who": "nemesis", "kind": "reaction",
                           "lines": g.engine.react(g.board, g.pending, move)})
+            if g.annotations and g.pending.reply:
+                g.annotations[-1]["reply"] = g.pending.reply
         g.board.push(move)
         nemesis_turn(g)
+        return state(g)
+
+    @app.post("/api/games/{game_id}/flag")
+    def flag(game_id: str) -> dict:
+        """The page saw your clock reach zero; the server checks and ends the game if so."""
+        g = get_game(game_id)
+        if not g.finished and g.tc and g.board.turn == g.human and g.time_left(g.human) <= 0:
+            out_of_time(g, g.human)
         return state(g)
 
     @app.post("/api/games/{game_id}/risk")
@@ -361,14 +436,18 @@ def create_app(db: str | Path = DEFAULT_DB, depth: int = 10) -> FastAPI:
         return state(g)
 
     @app.get("/api/ratings/{player}")
-    def player_ratings(player: str) -> dict:
-        return ratings.summary(store, player.lower())
+    def player_ratings(player: str, tc: str = "untimed") -> dict:
+        return ratings.summary(store, player.lower(), tc if tc in timecontrol.CATEGORIES else "untimed")
+
+    @app.get("/api/insights/{player}")
+    def player_insights(player: str) -> dict:
+        return insights(store, player.lower())
 
     @app.get("/api/games/list/{player}")
     def list_games(player: str) -> list[dict]:
         out = []
         for gr in reversed(store.games(player.lower())):
-            change = store.rating_change(gr.id).get(ratings.player_entity(player))
+            change = next((v for e, v in store.rating_change(gr.id).items() if e.startswith("player:")), None)
             out.append({
                 "id": gr.id, "date": gr.played_at, "source": gr.source, "opening": gr.opening,
                 "opponent": "Nemesis" if gr.source == "nemesis" else gr.opponent,

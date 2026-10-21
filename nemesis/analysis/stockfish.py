@@ -115,7 +115,8 @@ def impute_losses(board: chess.Board, lines: dict[str, int]) -> dict[str, int]:
 
 
 class Analyzer(Protocol):
-    def lines(self, board: chess.Board, multipv: int = 6, extra: Iterable[str] = ()) -> dict[str, int]: ...
+    def lines(self, board: chess.Board, multipv: int = 6, extra: Iterable[str] = (),
+              depth: int | None = None) -> dict[str, int]: ...
 
 
 class StockfishAnalyzer:
@@ -148,10 +149,11 @@ class StockfishAnalyzer:
     def __exit__(self, *exc) -> None:
         self.close()
 
-    def _run(self, board: chess.Board, multipv: int, root_moves: list[chess.Move] | None) -> dict[str, int]:
+    def _run(self, board: chess.Board, multipv: int, root_moves: list[chess.Move] | None,
+             depth: int) -> dict[str, int]:
         with self._lock:
             infos = self.engine.analyse(
-                board, chess.engine.Limit(depth=self.depth), multipv=multipv, root_moves=root_moves,
+                board, chess.engine.Limit(depth=depth), multipv=multipv, root_moves=root_moves,
             )
         out: dict[str, int] = {}
         for info in infos:
@@ -159,23 +161,27 @@ class StockfishAnalyzer:
                 out[info["pv"][0].uci()] = score_cp(info["score"], board.turn)
         return out
 
-    def lines(self, board: chess.Board, multipv: int = 6, extra: Iterable[str] = ()) -> dict[str, int]:
+    def lines(self, board: chess.Board, multipv: int = 6, extra: Iterable[str] = (),
+              depth: int | None = None) -> dict[str, int]:
+        """`depth` overrides the default for this call (shallower when short on time).
+        A deeper cached analysis always satisfies a shallower request."""
         if board.is_game_over():
             return {}
+        depth = depth or self.depth
         key = board.fen()
         legal = {m.uci() for m in board.legal_moves}
         multipv = min(multipv, len(legal))
-        cached = self.store.get_eval(key, self.depth) if self.store else None
+        cached = self.store.get_eval(key, depth) if self.store else None
         # "_mpv" records how many unrestricted lines are in the entry, so that extra moves
         # analysed on their own never pass for a full MultiPV search.
         if cached is None or cached.get("_mpv", 0) < multipv:
-            cached = {**(cached or {}), **self._run(board, multipv, None), "_mpv": multipv}
+            cached = {**(cached or {}), **self._run(board, multipv, None, depth), "_mpv": multipv}
             if self.store:
-                self.store.put_eval(key, self.depth, cached)
+                self.store.put_eval(key, depth, cached)
         missing = [u for u in extra if u in legal and u not in cached]
         if missing:
-            more = self._run(board, len(missing), [chess.Move.from_uci(u) for u in missing])
+            more = self._run(board, len(missing), [chess.Move.from_uci(u) for u in missing], depth)
             cached = {**cached, **more}
             if self.store:
-                self.store.put_eval(key, self.depth, cached)
+                self.store.put_eval(key, depth, cached)
         return {u: cp for u, cp in cached.items() if u != "_mpv"}

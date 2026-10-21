@@ -67,6 +67,15 @@ CREATE TABLE IF NOT EXISTS reviews (
     data    TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS model_history (  -- how well the model predicted you, each time it was trained
+    player     TEXT NOT NULL,
+    trained_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    games      INTEGER,
+    top1       REAL,
+    top3       REAL,
+    baseline   REAL                     -- the generic model's top-1 on the same held-out moves
+);
+
 CREATE TABLE IF NOT EXISTS models (
     player     TEXT PRIMARY KEY,
     weights    TEXT NOT NULL,
@@ -109,6 +118,26 @@ class Store:
         self.conn = sqlite3.connect(self.path, check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
         self.conn.executescript(SCHEMA)
+        self._migrate()
+
+    # -- schema versions ---------------------------------------------------
+    def _migrate(self) -> None:
+        """Bring an older database up to date. A file database is backed up first."""
+        version = self.conn.execute("PRAGMA user_version").fetchone()[0]
+        pending = [(v, fn) for v, fn in MIGRATIONS if v > version]
+        if not pending:
+            return
+        has_data = self.conn.execute("SELECT 1 FROM games LIMIT 1").fetchone() is not None
+        if has_data and self.path != ":memory:":
+            backup = Path(f"{self.path}.backup-v{version}")
+            if not backup.exists():
+                dest = sqlite3.connect(backup)
+                self.conn.backup(dest)
+                dest.close()
+        for v, fn in pending:
+            with self.conn:
+                fn(self.conn)
+                self.conn.execute(f"PRAGMA user_version = {v}")
 
     def close(self) -> None:
         self.conn.close()
@@ -258,6 +287,20 @@ class Store:
             )
             self.conn.commit()
 
+    def add_model_history(self, player: str, games: int, top1: float, top3: float, baseline: float) -> None:
+        with self._lock:
+            self.conn.execute(
+                "INSERT INTO model_history(player, games, top1, top3, baseline) VALUES (?,?,?,?,?)",
+                (player.lower(), games, top1, top3, baseline))
+            self.conn.commit()
+
+    def model_history(self, player: str) -> list[dict]:
+        with self._lock:
+            rows = self.conn.execute(
+                "SELECT trained_at, games, top1, top3, baseline FROM model_history "
+                "WHERE player=? ORDER BY rowid", (player.lower(),)).fetchall()
+        return [dict(r) for r in rows]
+
     def load_model(self, player: str) -> tuple[dict, dict] | None:
         with self._lock:
             row = self.conn.execute(
@@ -266,3 +309,20 @@ class Store:
         if row is None:
             return None
         return json.loads(row["weights"]), json.loads(row["metrics"])
+
+
+# ---------------------------------------------------------------------------
+# Migrations: (version, function). Never edit a released one; add a new one.
+# ---------------------------------------------------------------------------
+
+def _m1_ratings_per_time_control(conn: sqlite3.Connection) -> None:
+    """v0.2: ratings are kept per time control. Everything before was untimed."""
+    for table in ("ratings", "rating_history"):
+        conn.execute(f"UPDATE {table} SET entity = entity || ':untimed' WHERE "
+                     "(entity LIKE 'player:%' AND length(entity) - length(replace(entity, ':', '')) = 1) OR "
+                     "(entity LIKE 'nemesis:%' AND length(entity) - length(replace(entity, ':', '')) = 2)")
+
+
+MIGRATIONS = [
+    (1, _m1_ratings_per_time_control),
+]
