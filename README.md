@@ -141,6 +141,15 @@ Any game can be reviewed: games played here and imported ones. In the web app, o
 
   All of this is saved while the game is played, so retraining later doesn't change it.
 
+## Puzzles from your mistakes
+
+Open the **Puzzles** tab to drill the positions where you went wrong in your own games.
+
+- **Where they come from:** every position where your move cost at least 1.5 pawns and one move was clearly best (at least a pawn better than anything else). Nemesis finds them each time it studies your games. If you imported games before puzzles existed, press **Retrain** once.
+- **Hardest first:** your move model estimates how likely *you* are to find each move, and the ones you'd most likely miss come first. Puzzles you miss come back after the new ones.
+- **Hint** names the theme (a fork, a threat, a piece in danger, checkmate…) without giving the move.
+- **After you answer**, Nemesis shows the solution and what follows on the board, and reminds you what you played in the real game and what it cost.
+
 ## Does exploitation pay?
 
 `scripts/simulate.py` generates games for synthetic players with known styles. `scripts/benchmark.py` then plays Nemesis (risk 100, full strength) and plain Stockfish at the same depth against the same player, using the same seeds. Results after training on 30 games of each:
@@ -165,6 +174,7 @@ nemesis/
   commentary.py what Nemesis says (X-Ray / Poker Face)
   ratings.py    Elo for you and for each Nemesis risk tier
   review.py     game review: accuracy, labels, key moments, Nemesis's side
+  puzzles.py    puzzles mined from your mistakes
   engine.py     Nemesis = model + opening tree + search
   launcher.py   double-click entry: free port, reuse a running copy, open the browser
   learn.py      training pipeline; recording games played against Nemesis

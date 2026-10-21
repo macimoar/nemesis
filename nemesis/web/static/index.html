@@ -134,6 +134,9 @@
   .moves button { background: transparent; color: var(--ink); border: 0; padding: 2px 6px; border-radius: 6px; text-align: left; font: inherit; }
   .moves button.on { background: var(--accent-soft); }
   .now { margin-top: 10px; min-height: 2.8em; }
+  .now ul { margin: 6px 0 0; padding-left: 20px; }
+  .good { color: var(--good); } .bad { color: var(--l-blunder); }
+  .hint { color: var(--l-inaccuracy); }
   .accs { display: flex; gap: 16px; flex-wrap: wrap; }
   .acc { flex: 1; min-width: 130px; padding: 12px; border: 1px solid var(--line); border-radius: 10px; text-align: center; }
   .acc big { display: block; font-size: 30px; font-weight: 600; font-variant-numeric: tabular-nums; }
@@ -251,6 +254,17 @@
       <svg id="graph" class="graph" preserveAspectRatio="none" role="img" aria-label="Evaluation graph"></svg>
       <div id="rv-moves" class="moves"></div>
     </div>
+    <div id="puzzlebar" class="hidden">
+      <div id="pz-now" class="now" aria-live="polite"></div>
+      <div class="row">
+        <button class="ghost" id="pz-hint">Hint</button>
+        <button class="ghost" id="pz-giveup">Show solution</button>
+        <button class="ghost hidden" id="pz-replay">Replay the idea</button>
+        <button id="pz-next" class="hidden">Next puzzle</button>
+        <button class="ghost" id="pz-flip">Flip</button>
+        <button class="ghost" id="pz-exit">Back to play</button>
+      </div>
+    </div>
   </section>
 
   <section class="panel">
@@ -259,6 +273,7 @@
       <button data-tab="import">Import games</button>
       <button data-tab="thinking">Nemesis's thinking</button>
       <button data-tab="games">Games</button>
+      <button data-tab="puzzles">Puzzles</button>
       <button data-tab="review" class="hidden" id="reviewtab">Review</button>
     </div>
 
@@ -286,6 +301,10 @@
       <div id="rv-status" class="status"></div>
     </div>
 
+    <div id="tab-puzzles" class="hidden">
+      <div id="puzzles"><p class="muted">Loading…</p></div>
+    </div>
+
     <div id="tab-review" class="hidden">
       <div id="review"></div>
     </div>
@@ -302,6 +321,7 @@ const GLYPH = { k: "♚", q: "♛", r: "♜", b: "♝", n: "♞", p: "♟" };
 const $ = (id) => document.getElementById(id);
 let game = null, selected = null, flipped = false;
 let review = null, rply = -1;   // review mode: the reviewed game and the ply shown (-1 = start)
+let puz = null;   // puzzle mode: {p: the puzzle, result: your answer's outcome, shown: fen on the board, last}
 
 async function api(path, body) {
   const opts = body === undefined ? {} : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) };
@@ -345,12 +365,16 @@ function render() {
   if (review) {
     fen = rply < 0 ? review.game.start_fen : review.moves[rply].fen_after;
     lastUci = rply < 0 ? null : review.moves[rply].uci;
+  } else if (puz) {
+    fen = puz.shown; lastUci = puz.last;
   }
   const pieces = parseFen(fen);
   if (pendingMove && !review) { applyPending(pieces, pendingMove); lastUci = pendingMove; }
-  const targets = new Set(selected && game && !review ? (game.legal[selected] || []).map(u => u.slice(2, 4)) : []);
+  if (puz && puz.tried) { applyPending(pieces, puz.tried); lastUci = puz.tried; }   // your wrong answer, briefly
+  const targets = new Set(selected && !review ? movesFrom(selected).map(u => u.slice(2, 4)) : []);
   const last = lastUci ? [lastUci.slice(0, 2), lastUci.slice(2, 4)] : [];
-  const turn = game ? game.turn : "white";
+  const turn = puz ? puz.p.color : game ? game.turn : "white";
+  const inCheck = puz ? puz.p.check && !puz.result : game && game.check;
   for (let r = 0; r < 8; r++) for (let f = 0; f < 8; f++) {
     const rank = flipped ? r + 1 : 8 - r, file = flipped ? 7 - f : f;
     const name = "abcdefgh"[file] + rank;
@@ -367,7 +391,7 @@ function render() {
       s.className = "pc " + (white ? "w" : "b");
       s.textContent = GLYPH[p.toLowerCase()];
       d.appendChild(s);
-      if (!review && !pendingMove && game && game.check && p.toLowerCase() === "k" && (white ? "white" : "black") === turn) d.classList.add("incheck");
+      if (!review && !pendingMove && inCheck && p.toLowerCase() === "k" && (white ? "white" : "black") === turn) d.classList.add("incheck");
     }
     if (f === 0) d.insertAdjacentHTML("beforeend", `<span class="coord r">${rank}</span>`);
     if (r === 7) d.insertAdjacentHTML("beforeend", `<span class="coord f">${"abcdefgh"[file]}</span>`);
@@ -378,8 +402,9 @@ function render() {
 // ---------------------------------------------------------------------------
 // Moving: click a piece then a square, or drag it. Promotions ask which piece.
 // ---------------------------------------------------------------------------
-const canMove = () => game && !game.finished && !review && !pendingMove && !promoOpen && game.turn === game.human;
-const movesFrom = (sq) => (game && game.legal[sq]) || [];
+const canMove = () => !review && !pendingMove && !promoOpen &&
+  (puz ? !puz.result : game && !game.finished && game.turn === game.human);
+const movesFrom = (sq) => (puz ? puz.result ? [] : puz.p.legal[sq] : game && game.legal[sq]) || [];
 const movesTo = (from, to) => movesFrom(from).filter(u => u.slice(2, 4) === to);
 let drag = null, promoOpen = false;
 
@@ -394,6 +419,7 @@ function tryMove(from, to) {
 
 async function submitMove(uci) {
   sfx(moveSound(uci));
+  if (puz) return answerPuzzle(uci);
   pendingMove = uci;
   $("status").textContent = "Nemesis is thinking…";
   render();
@@ -411,7 +437,7 @@ async function submitMove(uci) {
 
 function showPromotion(from, to) {
   promoOpen = true;
-  const white = game.human === "white";
+  const white = (puz ? puz.p.color : game.human) === "white";
   const sqEl = document.querySelector(`#board [data-sq="${to}"]`);
   const board = $("board"), b = board.getBoundingClientRect(), r = sqEl.getBoundingClientRect();
   const atTop = r.top - b.top < b.height / 2;   // open downward from the top edge, upward from the bottom
@@ -686,7 +712,8 @@ async function watchJob(id) {
 function showTab(name) {
   document.querySelectorAll(".tabs button").forEach(b => b.classList.toggle("on", b.dataset.tab === name));
   if (name === "games") loadGames($("player").value);
-  for (const t of ["profile", "import", "thinking", "games", "review"]) $("tab-" + t).classList.toggle("hidden", t !== name);
+  if (name === "puzzles" && !puz) loadPuzzles($("player").value);
+  for (const t of ["profile", "import", "thinking", "games", "puzzles", "review"]) $("tab-" + t).classList.toggle("hidden", t !== name);
 }
 
 document.querySelectorAll(".tabs button").forEach(b => b.onclick = () => showTab(b.dataset.tab));
@@ -697,7 +724,11 @@ $("import").onclick = async () => {
     watchJob(job);
   } catch (e) { $("jobstatus").textContent = e.message; }
 };
-$("player").onchange = () => { loadProfile($("player").value); loadRatings($("player").value); };
+$("player").onchange = () => {
+  loadProfile($("player").value); loadRatings($("player").value);
+  if (puz) exitPuzzles();
+  else if (!$("tab-puzzles").classList.contains("hidden")) loadPuzzles($("player").value);
+};
 $("risk").oninput = riskLabel;
 $("commentary").onchange = async () => {
   try { localStorage.setItem("nemesis-commentary", $("commentary").value); } catch (e) {}
@@ -709,6 +740,7 @@ $("newgame").onclick = async () => {
   const player = $("player").value;
   if (!player) { showTab("import"); $("jobstatus").textContent = "Import a player first."; return; }
   if (review) exitReview();
+  if (puz) exitPuzzles(false);
   flipped = $("color").value === "black";
   selected = null;
   $("status").textContent = "Starting…";
@@ -789,6 +821,7 @@ async function openReview(id) {
 }
 
 function enterReview(data) {
+  if (puz) exitPuzzles(false);
   review = data; rply = -1; selected = null;
   flipped = data.game.you === "black";
   $("playbar").classList.add("hidden"); $("reviewbar").classList.remove("hidden");
@@ -891,6 +924,122 @@ document.addEventListener("keydown", (e) => {
   if (e.key === "ArrowLeft") { goto(rply - 1); e.preventDefault(); }
   if (e.key === "ArrowRight") { goto(rply + 1); e.preventDefault(); }
 });
+
+// ---------------------------------------------------------------------------
+// Puzzles from your own mistakes
+// ---------------------------------------------------------------------------
+const THEME_NAMES = { mate: "Checkmate", fork: "Forks", material: "Winning material", defend: "Saving a piece",
+                      threat: "Spotting threats", best: "Keeping the advantage" };
+let pzHinted = false, pzTimer = null;
+
+async function loadPuzzles(player) {
+  if (!player) { $("puzzles").innerHTML = `<p class="muted">Import your games first.</p>`; return; }
+  let s;
+  try { s = await api(`/api/puzzles/${encodeURIComponent(player)}`); }
+  catch (e) { $("puzzles").innerHTML = `<p class="muted">${escapeHtml(e.message)}</p>`; return; }
+  if (!s.total) {
+    $("puzzles").innerHTML = `<h2>Puzzles from your mistakes</h2>
+      <p>No puzzles yet. Nemesis finds them when it studies your games: positions where you lost
+      at least a pawn and a half and one move was clearly best.</p>
+      <p class="muted">Imported your games before puzzles existed? Retrain once to find them.</p>
+      <div class="row"><button id="pz-retrain">Retrain and find puzzles</button></div>`;
+    $("pz-retrain").onclick = async () => { const { job } = await api(`/api/train/${encodeURIComponent(player)}`, {}); watchJob(job); showTab("import"); };
+    return;
+  }
+  const stat = (k, v) => `<div class="stat"><span>${k}</span><span>${v}</span></div>`;
+  const themes = Object.entries(s.themes).map(([k, n]) => stat(THEME_NAMES[k] || k, n)).join("");
+  $("puzzles").innerHTML = `<h2>Puzzles from your mistakes</h2>
+    <p>${s.total} positions from your own games where you went wrong. The ones you're least likely to solve come first.</p>
+    ${stat("New", s.new)}${stat("Solved", s.solved)}${stat("Still to crack", s.missed)}
+    ${s.first_try != null ? stat("Solved first try", s.first_try + "%") : ""}
+    <h3>Themes</h3>${themes}
+    <div class="row"><button id="pz-start">${s.new + s.missed ? "Start" : "Practise again"}</button></div>`;
+  $("pz-start").onclick = () => nextPuzzle();
+}
+
+async function nextPuzzle(skip) {
+  const player = $("player").value;
+  if (game && game.clock && !game.finished) {   // your clock would keep running
+    $("puzzles").insertAdjacentHTML("beforeend", `<p class="err">Finish or resign your timed game first.</p>`);
+    return;
+  }
+  const q = skip ? `?skip=${encodeURIComponent(skip)}` : "";
+  const { puzzle } = await api(`/api/puzzles/${encodeURIComponent(player)}/next${q}`);
+  if (!puzzle) return loadPuzzles(player);
+  if (review) exitReview();
+  clearTimeout(pzTimer);
+  puz = { p: puzzle, result: null, shown: puzzle.fen, last: null };
+  pzHinted = false; selected = null; flipped = puzzle.color === "black";
+  $("playbar").classList.add("hidden"); $("reviewbar").classList.add("hidden"); $("puzzlebar").classList.remove("hidden");
+  ["clock-top", "clock-bottom"].forEach(id => $(id).classList.add("hidden"));
+  $("pz-hint").classList.remove("hidden"); $("pz-giveup").classList.remove("hidden");
+  $("pz-next").classList.add("hidden"); $("pz-replay").classList.add("hidden");
+  const from = puzzle.opponent ? ` against ${escapeHtml(puzzle.opponent)}` : "";
+  const when = puzzle.date ? ` on ${escapeHtml(puzzle.date)}` : "";
+  const again = puzzle.status === "missed" ? " You missed this one before." : puzzle.status === "solved" ? " Review: you've solved this one." : "";
+  $("pz-now").innerHTML = `<b>${puzzle.color === "white" ? "White" : "Black"} to move. Find the best move.</b>
+    <br><span class="muted">From your game${from}${when}, move ${puzzle.move_number}.${again}</span>`;
+  render();
+  showTab("puzzles");
+  $("puzzles").innerHTML = `<h2>Puzzle</h2><p class="muted">You went wrong here in a real game. Take your time: there's no clock.</p>
+    ${puzzle.chance != null ? `<p>Nemesis thinks you'd find this move <b>${pct(puzzle.chance)}</b> of the time.</p>` : ""}`;
+}
+
+async function answerPuzzle(uci) {
+  pendingMove = null;
+  puz.last = uci;
+  const res = await api(`/api/puzzle/${encodeURIComponent(puz.p.id)}/attempt`, { uci, hinted: pzHinted });
+  showResult(res, uci);
+}
+
+function showResult(res, uci) {
+  puz.result = res;
+  $("pz-hint").classList.add("hidden"); $("pz-giveup").classList.add("hidden");
+  $("pz-next").classList.remove("hidden"); $("pz-replay").classList.toggle("hidden", res.fens.length < 2);
+  const [first, ...rest] = res.explanation;
+  const verdict = !uci ? `<b>${escapeHtml(first)}</b>` : res.solved ? `<b class="good">✓ ${escapeHtml(first)}</b>` : `<b class="bad">✗ Not this time. ${escapeHtml(first)}</b>`;
+  $("pz-now").innerHTML = verdict + `<ul>${rest.map(l => `<li>${escapeHtml(l)}</li>`).join("")}</ul>`;
+  sfx(res.solved ? "move" : "end");
+  if (!res.solved && uci) {   // show your move briefly, then the solution
+    puz.tried = uci; render();
+    pzTimer = setTimeout(() => playLine(res), 900);
+  } else playLine(res);
+  $("pz-next").focus();
+}
+
+function playLine(res) {
+  clearTimeout(pzTimer);
+  let i = 0;
+  const step = () => {
+    puz.shown = res.fens[i]; puz.last = res.line[i]; render();
+    if (++i < res.fens.length) pzTimer = setTimeout(step, 900);
+  };
+  puz.shown = puz.p.fen; puz.last = null; puz.tried = null; render();
+  pzTimer = setTimeout(step, 400);
+}
+
+function exitPuzzles(toProfile = true) {
+  clearTimeout(pzTimer);
+  puz = null; selected = null;
+  $("puzzlebar").classList.add("hidden"); $("playbar").classList.remove("hidden");
+  flipped = game ? game.human === "black" : false;
+  if (game) update(); else render();
+  if (toProfile) showTab("puzzles");
+}
+
+$("pz-hint").onclick = () => {
+  pzHinted = true;
+  $("pz-now").insertAdjacentHTML("beforeend", `<br><span class="hint">Hint: ${escapeHtml(puz.p.hint)}</span>`);
+  $("pz-hint").classList.add("hidden");
+};
+$("pz-giveup").onclick = async () => {
+  const res = await api(`/api/puzzle/${encodeURIComponent(puz.p.id)}/attempt`, { uci: "", hinted: pzHinted });
+  showResult(res, "");
+};
+$("pz-replay").onclick = () => puz && puz.result && playLine(puz.result);
+$("pz-next").onclick = () => nextPuzzle(puz && puz.p.id);
+$("pz-flip").onclick = () => { flipped = !flipped; render(); };
+$("pz-exit").onclick = () => exitPuzzles();
 
 for (let e = 800; e <= 2400; e += 100) $("strength").insertAdjacentHTML("beforeend", `<option value="${e}">${e}${e === 2400 ? " (full strength)" : ""}</option>`);
 try { const saved = localStorage.getItem("nemesis-strength"); if (saved) $("strength").value = saved; } catch (e) {}
@@ -1001,7 +1150,7 @@ function sfx(kind) {
 
 // Your own move: tell capture/castle from the board before it changes.
 function moveSound(uci) {
-  const pieces = parseFen(game.fen), from = uci.slice(0, 2), to = uci.slice(2, 4), p = pieces[from] || "";
+  const pieces = parseFen(puz ? puz.shown : game.fen), from = uci.slice(0, 2), to = uci.slice(2, 4), p = pieces[from] || "";
   if (pieces[to] || (p.toLowerCase() === "p" && from[0] !== to[0])) return "capture";
   if (p.toLowerCase() === "k" && Math.abs(from.charCodeAt(0) - to.charCodeAt(0)) === 2) return "castle";
   return "move";
@@ -1053,7 +1202,7 @@ function fmtClock(t) {
 }
 
 function tickClocks() {
-  const show = !!(game && game.clock && !review);
+  const show = !!(game && game.clock && !review && !puz);
   for (const id of ["clock-top", "clock-bottom"]) $(id).classList.toggle("hidden", !show);
   if (!show) return;
   const top = flipped ? "white" : "black", bottom = flipped ? "black" : "white";

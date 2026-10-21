@@ -84,6 +84,25 @@ CREATE TABLE IF NOT EXISTS samples (  -- cached training features per game (see 
     meta    TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS puzzles (  -- positions from your games where you went wrong
+    id       TEXT PRIMARY KEY,            -- game_id#ply
+    player   TEXT NOT NULL,
+    game_id  TEXT NOT NULL,
+    ply      INTEGER NOT NULL,
+    fen      TEXT NOT NULL,
+    solution TEXT NOT NULL,               -- best move (uci)
+    data     TEXT NOT NULL                -- JSON: line, themes, difficulty, your move, loss, ...
+);
+CREATE INDEX IF NOT EXISTS puzzles_player ON puzzles(player);
+
+CREATE TABLE IF NOT EXISTS puzzle_attempts (
+    puzzle_id TEXT NOT NULL,
+    at        TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    move      TEXT NOT NULL,
+    solved    INTEGER NOT NULL,
+    hinted    INTEGER NOT NULL DEFAULT 0
+);
+
 CREATE TABLE IF NOT EXISTS models (
     player     TEXT PRIMARY KEY,
     weights    TEXT NOT NULL,
@@ -298,6 +317,43 @@ class Store:
         with self._lock:
             self.conn.execute("INSERT OR REPLACE INTO samples VALUES (?,?,?,?,?)",
                               (game_id, version, depth, data, meta))
+            self.conn.commit()
+
+    # -- puzzles -----------------------------------------------------------
+    def put_puzzle(self, pid: str, player: str, game_id: str, ply: int, fen: str, solution: str,
+                   data: dict) -> None:
+        with self._lock:
+            self.conn.execute("INSERT OR REPLACE INTO puzzles VALUES (?,?,?,?,?,?,?)",
+                              (pid, player.lower(), game_id, ply, fen, solution, json.dumps(data)))
+            self.conn.commit()
+
+    def puzzle_ids(self, player: str) -> set[str]:
+        with self._lock:
+            return {r[0] for r in self.conn.execute("SELECT id FROM puzzles WHERE player=?", (player.lower(),))}
+
+    def puzzles(self, player: str) -> list[dict]:
+        """All of a player's puzzles, each with its attempt history (oldest first)."""
+        with self._lock:
+            rows = self.conn.execute("SELECT * FROM puzzles WHERE player=?", (player.lower(),)).fetchall()
+            attempts = self.conn.execute(
+                "SELECT a.puzzle_id, a.solved, a.hinted FROM puzzle_attempts a JOIN puzzles p "
+                "ON p.id=a.puzzle_id WHERE p.player=? ORDER BY a.rowid", (player.lower(),)).fetchall()
+        tries: dict[str, list[dict]] = {}
+        for a in attempts:
+            tries.setdefault(a["puzzle_id"], []).append({"solved": bool(a["solved"]), "hinted": bool(a["hinted"])})
+        return [{**{k: r[k] for k in ("id", "game_id", "ply", "fen", "solution")}, **json.loads(r["data"]),
+                 "attempts": tries.get(r["id"], [])} for r in rows]
+
+    def puzzle(self, pid: str) -> dict | None:
+        with self._lock:
+            r = self.conn.execute("SELECT * FROM puzzles WHERE id=?", (pid,)).fetchone()
+        return None if r is None else {**{k: r[k] for k in ("id", "player", "game_id", "ply", "fen", "solution")},
+                                       **json.loads(r["data"])}
+
+    def add_puzzle_attempt(self, pid: str, move: str, solved: bool, hinted: bool) -> None:
+        with self._lock:
+            self.conn.execute("INSERT INTO puzzle_attempts(puzzle_id, move, solved, hinted) VALUES (?,?,?,?)",
+                              (pid, move, int(solved), int(hinted)))
             self.conn.commit()
 
     # -- models ------------------------------------------------------------

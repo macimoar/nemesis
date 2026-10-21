@@ -49,7 +49,8 @@ def cmd_train(args: argparse.Namespace) -> None:
 
 
 def print_metrics(metrics: dict) -> None:
-    print(f"trained on {metrics['samples']} moves from {metrics['games']} games")
+    print(f"trained on {metrics['samples']} moves from {metrics['games']} games; "
+          f"{metrics.get('new_puzzles', 0)} new puzzles")
     if "holdout" in metrics:
         h, p = metrics["holdout"], metrics["holdout_prior"]
         print(f"held-out newest games ({h['n']} moves):")

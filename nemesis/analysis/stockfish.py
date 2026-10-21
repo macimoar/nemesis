@@ -149,6 +149,15 @@ class StockfishAnalyzer:
     def __exit__(self, *exc) -> None:
         self.close()
 
+    def pv(self, board: chess.Board, first: str | None = None, plies: int = 6) -> list[str]:
+        """The principal variation (best line) from `board`, optionally starting with `first`."""
+        if board.is_game_over():
+            return []
+        root = [chess.Move.from_uci(first)] if first else None
+        with self._lock:
+            info = self.engine.analyse(board, chess.engine.Limit(depth=self.depth), root_moves=root)
+        return [m.uci() for m in info.get("pv", [])[:plies]]
+
     def _run(self, board: chess.Board, multipv: int, root_moves: list[chess.Move] | None,
              depth: int) -> dict[str, int]:
         with self._lock:

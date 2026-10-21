@@ -21,7 +21,7 @@ from pydantic import BaseModel
 
 from nemesis.analysis.install import ensure_stockfish
 from nemesis.analysis.stockfish import StockfishAnalyzer
-from nemesis import commentary, ratings, timecontrol
+from nemesis import commentary, puzzles, ratings, timecontrol
 from nemesis.engine import Nemesis
 from nemesis.search import Decision
 from nemesis.features import STYLE_TEXT
@@ -81,6 +81,11 @@ class RiskReq(BaseModel):
 
 class CommentaryReq(BaseModel):
     mode: str
+
+
+class AttemptReq(BaseModel):
+    uci: str
+    hinted: bool = False
 
 
 class EloReq(BaseModel):
@@ -179,7 +184,9 @@ def create_app(db: str | Path = DEFAULT_DB, depth: int = 10) -> FastAPI:
         analyzer = get_analyzer()
         started = time.monotonic()
         _, metrics = train(store, job.player, analyzer, progress=progress)
-        job.message = f"Done: studied {metrics['samples']} of your moves from {metrics['games']} games."
+        found = metrics.get("new_puzzles", 0)
+        job.message = (f"Done: studied {metrics['samples']} of your moves from {metrics['games']} games"
+                       + (f", and found {found} new puzzle{'s' if found != 1 else ''} in your mistakes." if found else "."))
         for g in games.values():
             if g.player == job.player:
                 g.engine.reload()
@@ -486,6 +493,22 @@ def create_app(db: str | Path = DEFAULT_DB, depth: int = 10) -> FastAPI:
     @app.get("/api/insights/{player}")
     def player_insights(player: str) -> dict:
         return insights(store, player.lower())
+
+    @app.get("/api/puzzles/{player}")
+    def puzzle_summary(player: str) -> dict:
+        return puzzles.summary(store, player)
+
+    @app.get("/api/puzzles/{player}/next")
+    def puzzle_next(player: str, skip: str | None = None) -> dict:
+        p = puzzles.next_puzzle(store, player, skip)
+        return {"puzzle": puzzles.public(p) if p else None}
+
+    @app.post("/api/puzzle/{puzzle_id:path}/attempt")
+    def puzzle_attempt(puzzle_id: str, req: AttemptReq) -> dict:
+        try:
+            return puzzles.attempt(store, puzzle_id, req.uci, req.hinted)
+        except KeyError:
+            raise HTTPException(404, "No such puzzle")
 
     @app.get("/api/games/list/{player}")
     def list_games(player: str) -> list[dict]:

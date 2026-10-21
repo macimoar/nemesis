@@ -31,8 +31,9 @@ the clock and the "does it work on you?" stats, v0.2.1 and v0.2.2 the rest.
 
 Nemesis knows your weaknesses, so it can drill them.
 
-- **Puzzles from your own mistakes.** Positions from your games where you missed a
-  fork, ignored a threat or hung a piece, replayed as "find the move" exercises.
+- ✅ **Puzzles from your own mistakes.** Positions from your games where you missed a
+  fork, ignored a threat or hung a piece, replayed as "find the move" exercises,
+  hardest-for-you first.
 - **Opening repair.** For the openings where you score worst, play through the
   lines where you usually go wrong until you stop going wrong.
 - **Doppelgänger mode.** The model that predicts your moves can also play like any
