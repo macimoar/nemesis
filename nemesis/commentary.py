@@ -272,3 +272,21 @@ POKER_REACT = {
     "dodged": ["...Well spotted.", "You saw it. Shame.", "Hm. You're paying attention."],
     "blunder": ["Oh, thank you.", "Are you sure about that?", "I'll take that."],
 }
+
+
+POKER_DRAW = {
+    True: ["Fine. A draw.", "I'll take it.", "Agreed. Another time."],
+    False: ["No thanks.", "Keep playing.", "Not a chance.", "We're not done."],
+}
+
+
+def draw_reply(accept: bool, expected: float, cp: int, mode: str = XRAY, seed: str = "") -> list[str]:
+    """Nemesis's answer to your draw offer."""
+    if normalise_mode(mode) == POKER:
+        return [_pick(seed + str(accept), POKER_DRAW[accept])]
+    if accept:
+        why = (f"I give myself only about {expected:.0%} against you from here."
+               if expected <= 0.45 else "There's nothing left to play for. It's level.")
+        return [_label("Draw offer", f"Accepted. {why}")]
+    return [_label("Draw offer", f"Declined. I give myself about {expected:.0%} against you here, so let's play on."),
+            _label("The position", eval_words(cp))]

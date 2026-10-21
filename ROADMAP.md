@@ -17,8 +17,8 @@ clock and the "does it work on you?" stats; the rest arrives in v0.2.x updates.
   ratings kept per time control. Nemesis has its own clock and budgets its thinking
   so it never loses on time. Clock times are saved with each game, so training
   learns how you play under time pressure.
-- **Board basics:** ✅ promotion picker, ✅ drag-and-drop moves; still to come: move
-  sounds, draw offers, and downloading a game as PGN.
+- ✅ **Board basics:** promotion picker, drag-and-drop moves, move sounds, draw
+  offers (Nemesis decides from its chances against you), and PGN download.
 - **Faster learning:** after a game, Nemesis analyses only the new game instead of
   retraining from scratch. Retraining takes seconds instead of minutes.
 - ✅ **"Does it work on you?"** The profile shows how often Nemesis guessed your

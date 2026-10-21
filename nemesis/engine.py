@@ -64,6 +64,21 @@ class Nemesis:
         decision.lines = commentary.before(board, decision, self.mode)
         return decision
 
+    def consider_draw(self, board: chess.Board) -> tuple[bool, float, int]:
+        """Should Nemesis accept your draw offer? (accept, its expected score against you,
+        its eval in centipawns). `board` has you to move.
+
+        It judges as itself: by its chances against *you* (your predicted replies), not
+        against perfect play. It declines while it expects to come out ahead, and takes the
+        draw when it's worse, or when the game is a dead-level endgame.
+        """
+        searcher = Searcher(self.analyzer, self.model, self.tree, risk=self.risk, elo=None, rng=self.rng)
+        expected, replies = searcher.human_value(board, 1)
+        cp = -max((r.cp for r in replies), default=0)   # its eval: your best reply, from its side
+        major = sum(len(board.pieces(t, c)) for t in (chess.QUEEN, chess.ROOK) for c in chess.COLORS)
+        dead_level = abs(cp) <= 25 and major <= 2 and board.fullmove_number >= 30
+        return expected <= 0.45 or dead_level, expected, cp
+
     def target_elo(self) -> float:
         return ratings.target_elo(self.store, self.player, self.fixed_elo, self.tc)
 

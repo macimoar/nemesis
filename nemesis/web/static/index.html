@@ -94,7 +94,7 @@
   .tabs { display: flex; gap: 6px; margin-bottom: 12px; }
   .tabs button { background: transparent; color: var(--muted); border: 1px solid var(--line); }
   .tabs button.on { color: var(--ink); border-color: var(--accent); }
-  .hidden { display: none; }
+  .hidden { display: none !important; }   /* always wins over a component's own display */
   .progress { height: 4px; background: var(--line); border-radius: 2px; overflow: hidden; margin-top: 8px; }
   .clock { display: flex; justify-content: space-between; align-items: center; margin: 8px 0;
            padding: 6px 12px; border-radius: 8px; background: var(--bg); border: 1px solid var(--line); }
@@ -103,7 +103,6 @@
   .clock.running { background: var(--panel); border-color: var(--ink); }
   .clock.running .who { color: var(--ink); }
   .clock.low .time { color: var(--accent); }
-  .clock.hidden { display: none; }   /* .clock's display:flex comes later than .hidden, so restate it */
   .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin: 10px 0; }
   .tile { padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; }
   .tile .k { color: var(--muted); font-size: 13px; }
@@ -115,6 +114,10 @@
   .chartwrap .axis text { fill: var(--muted); font-size: 11px; }
   .tip { position: absolute; pointer-events: none; background: var(--panel); color: var(--ink); border: 1px solid var(--line);
          border-radius: 8px; padding: 6px 8px; font-size: 12px; box-shadow: 0 4px 14px rgba(0,0,0,.15); white-space: nowrap; }
+  a.btnlink { display: inline-block; border: 1px solid var(--line); border-radius: 8px; padding: 8px 14px;
+              color: var(--ink); text-decoration: none; font: inherit; }
+  a.btnlink:hover { border-color: var(--ink); }
+  a.small { font-size: 13px; color: var(--muted); margin-right: 8px; }
   .strip { display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: baseline; margin-top: 12px; font-size: 14px; }
   .strip b { font-variant-numeric: tabular-nums; }
   .strip .delta.up { color: var(--good); } .strip .delta.down { color: var(--accent); }
@@ -226,7 +229,10 @@
     <div id="playbar">
       <div class="row">
         <button id="resign" class="ghost" disabled>Resign</button>
+        <button id="draw" class="ghost" disabled>Offer draw</button>
         <button id="flip" class="ghost">Flip</button>
+        <a id="pgn" class="ghost btnlink hidden" download>Download PGN</a>
+        <button id="sound" class="ghost" aria-pressed="true" title="Move sounds">🔊</button>
         <button id="reviewgame" class="hidden">Review this game</button>
       </div>
       <div id="status" class="status"></div>
@@ -387,6 +393,7 @@ function tryMove(from, to) {
 }
 
 async function submitMove(uci) {
+  sfx(moveSound(uci));
   pendingMove = uci;
   $("status").textContent = "Nemesis is thinking…";
   render();
@@ -494,6 +501,11 @@ $("board").addEventListener("pointercancel", (e) => endDrag(e, true));
 function update() {
   clockAt = performance.now(); flagSent = false;
   render();
+  soundForUpdate();
+  $("draw").disabled = game.finished || game.turn !== game.human || game.draw_offer_in > 0;
+  $("draw").title = game.draw_offer_in > 0 ? `You can offer a draw again in ${game.draw_offer_in} move${game.draw_offer_in > 1 ? "s" : ""}` : "";
+  $("pgn").classList.toggle("hidden", !game.log.length);
+  $("pgn").href = `/api/pgn/${encodeURIComponent(game.id)}`;
   const log = $("log"); log.innerHTML = "";
   for (const m of [...game.log].reverse()) {
     const d = document.createElement("div");
@@ -756,7 +768,7 @@ async function loadGames(player) {
       <td>${escapeHtml(g.opponent || "?")} <span class="muted">(${g.source === "nemesis" ? "here" : g.source}, ${g.color})</span></td>
       <td>${resultText(g.result)}</td>
       <td class="n">${g.rating_change == null ? "" : (g.rating_change >= 0 ? "+" : "") + g.rating_change}</td>
-      <td><button class="ghost" data-review="${escapeHtml(g.id)}">${g.reviewed ? "View review" : "Review"}</button></td></tr>`).join("")}</table>`;
+      <td><a class="small" href="/api/pgn/${encodeURIComponent(g.id)}" download title="Download this game as PGN">PGN</a><button class="ghost" data-review="${escapeHtml(g.id)}">${g.reviewed ? "View review" : "Review"}</button></td></tr>`).join("")}</table>`;
   document.querySelectorAll("[data-review]").forEach(b => b.onclick = () => openReview(b.dataset.review));
 }
 
@@ -854,6 +866,7 @@ function renderReviewPanel() {
       ${n.elo ? `<p class="muted">Nemesis played at about ${n.elo} strength${n.slips ? `, with ${n.slips} deliberate slip${n.slips > 1 ? "s" : ""}` : ""}.</p>` : ""}`;
   }
   $("review").innerHTML = `<h2>Game review</h2>
+    <p><a class="small" href="/api/pgn/${encodeURIComponent(g.id)}" download>Download this game as PGN</a></p>
     <p>${g.you === "white" ? "You" : opp} vs ${g.you === "white" ? opp : "you"} · ${resultText(g.result)}
       ${g.opening ? `· <span class="muted">${escapeHtml(g.opening)}</span>` : ""}</p>
     <div class="accs"><div class="acc"><span class="muted">Your accuracy</span><big>${acc(r.accuracy.you)}</big></div>
@@ -954,6 +967,74 @@ function drawInsightsChart(rows) {
   };
   $("ins-hit").onmouseleave = () => { tip.classList.add("hidden"); cross.setAttribute("visibility", "hidden"); };
 }
+
+// ---------------------------------------------------------------------------
+// Sounds: synthesised with Web Audio, so there are no files to ship.
+// ---------------------------------------------------------------------------
+let audio = null, soundOn = true, heard = { id: null, moves: 0, end: false };
+try { soundOn = localStorage.getItem("nemesis-sound") !== "off"; } catch (e) {}
+
+function sfx(kind) {
+  if (!soundOn || !kind) return;
+  try { audio = audio || new (window.AudioContext || window.webkitAudioContext)(); } catch (e) { return; }
+  const t = audio.currentTime;
+  const click = (when, freq, gain, len) => {   // a filtered noise burst: a wooden "tock"
+    const buf = audio.createBuffer(1, Math.ceil(audio.sampleRate * len), audio.sampleRate);
+    const d = buf.getChannelData(0);
+    for (let i = 0; i < d.length; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / d.length, 4);
+    const src = audio.createBufferSource(), f = audio.createBiquadFilter(), g = audio.createGain();
+    src.buffer = buf; f.type = "bandpass"; f.frequency.value = freq; f.Q.value = 1.2; g.gain.value = gain;
+    src.connect(f).connect(g).connect(audio.destination); src.start(when);
+  };
+  const tone = (when, freq, len, gain = 0.12) => {
+    const o = audio.createOscillator(), g = audio.createGain();
+    o.frequency.value = freq; o.type = "sine";
+    g.gain.setValueAtTime(gain, when); g.gain.exponentialRampToValueAtTime(0.0001, when + len);
+    o.connect(g).connect(audio.destination); o.start(when); o.stop(when + len);
+  };
+  if (kind === "move") click(t, 1700, 0.9, 0.05);
+  if (kind === "castle") { click(t, 1700, 0.8, 0.05); click(t + 0.09, 1500, 0.8, 0.05); }
+  if (kind === "capture") { click(t, 1100, 1.4, 0.09); click(t + 0.02, 2400, 0.6, 0.04); }
+  if (kind === "check") { click(t, 1600, 0.9, 0.05); tone(t + 0.03, 880, 0.18); }
+  if (kind === "end") { tone(t, 523, 0.25); tone(t + 0.18, 659, 0.25); tone(t + 0.36, 784, 0.4); }
+}
+
+// Your own move: tell capture/castle from the board before it changes.
+function moveSound(uci) {
+  const pieces = parseFen(game.fen), from = uci.slice(0, 2), to = uci.slice(2, 4), p = pieces[from] || "";
+  if (pieces[to] || (p.toLowerCase() === "p" && from[0] !== to[0])) return "capture";
+  if (p.toLowerCase() === "k" && Math.abs(from.charCodeAt(0) - to.charCodeAt(0)) === 2) return "castle";
+  return "move";
+}
+
+// Nemesis's move and the end of the game, once each, from what the server sent.
+function soundForUpdate() {
+  if (heard.id !== game.id) heard = { id: game.id, moves: 0, end: false };
+  const moves = game.log.filter(m => m.kind === "move");
+  if (moves.length > heard.moves) {
+    const san = moves[moves.length - 1].san || "";
+    if (!game.finished) sfx(san.includes("+") ? "check" : san.includes("x") ? "capture" : san.startsWith("O-O") ? "castle" : "move");
+    heard.moves = moves.length;
+  }
+  if (game.finished && !heard.end) { sfx("end"); heard.end = true; }
+}
+
+function setSound(on) {
+  soundOn = on;
+  $("sound").textContent = on ? "🔊" : "🔇";
+  $("sound").setAttribute("aria-pressed", String(on));
+  $("sound").title = on ? "Move sounds on (click to mute)" : "Move sounds off (click to turn on)";
+  try { localStorage.setItem("nemesis-sound", on ? "on" : "off"); } catch (e) {}
+}
+$("sound").onclick = () => { setSound(!soundOn); if (soundOn) sfx("move"); };
+setSound(soundOn);
+
+$("draw").onclick = async () => {
+  if (!game || game.finished) return;
+  $("draw").disabled = true;
+  try { game = await api(`/api/games/${game.id}/draw`, {}); update(); }
+  catch (e) { $("status").textContent = e.message; $("draw").disabled = false; }
+};
 
 // ---------------------------------------------------------------------------
 // Clocks: the server keeps time; the page counts down between updates.

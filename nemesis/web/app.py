@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import io
+import re
 import threading
 import time
 import traceback
@@ -11,9 +13,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import chess
+import chess.pgn
 import httpx
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel
 
 from nemesis.analysis.install import ensure_stockfish
@@ -23,12 +26,13 @@ from nemesis.engine import Nemesis
 from nemesis.search import Decision
 from nemesis.features import STYLE_TEXT
 from nemesis.insights import insights
-from nemesis.learn import record_game, train
+from nemesis.learn import build_pgn, record_game, train
 from nemesis.review import cached_review, rating_changes, review_game
 from nemesis.store import DEFAULT_DB, Store
 from nemesis.timecontrol import TimeControl
 
 STATIC = Path(__file__).parent / "static"
+DRAW_OFFER_GAP = 3   # your moves between draw offers
 
 
 def _time_left(started: float, done: int, total: int) -> str:
@@ -111,6 +115,7 @@ class Game:
     turn_started: float = 0.0                        # time.monotonic() when the side to move began
     clocks: list = field(default_factory=list)       # mover's seconds left after each move
     reason: str = ""                                 # how it ended, when not by the board
+    last_draw_offer: int = -99                       # your move number when you last offered a draw
 
     def time_left(self, color: chess.Color) -> float | None:
         if not self.tc:
@@ -194,6 +199,7 @@ def create_app(db: str | Path = DEFAULT_DB, depth: int = 10) -> FastAPI:
             "tier": ratings.tier(g.engine.risk), "elo": round(g.engine.target_elo()),
             "fixed_elo": g.engine.fixed_elo, "ratings": ratings.summary(store, g.player, g.engine.tc),
             "game_id": g.game_id, "reason": g.reason,
+            "draw_offer_in": max(0, DRAW_OFFER_GAP - (g.board.fullmove_number - g.last_draw_offer)),
             "clock": None if not g.tc else {
                 "white": g.time_left(chess.WHITE), "black": g.time_left(chess.BLACK),
                 "running": None if g.finished else ("white" if g.board.turn == chess.WHITE else "black"),
@@ -401,6 +407,44 @@ def create_app(db: str | Path = DEFAULT_DB, depth: int = 10) -> FastAPI:
         g.board.push(move)
         nemesis_turn(g)
         return state(g)
+
+    @app.post("/api/games/{game_id}/draw")
+    def offer_draw(game_id: str) -> dict:
+        """You offer a draw; Nemesis decides as itself, from its chances against you."""
+        g = get_game(game_id)
+        if g.finished or g.board.turn != g.human:
+            raise HTTPException(409, "you can offer a draw on your turn")
+        move_no = g.board.fullmove_number
+        if move_no - g.last_draw_offer < DRAW_OFFER_GAP:
+            raise HTTPException(429, f"You can offer a draw again in {DRAW_OFFER_GAP - (move_no - g.last_draw_offer)} moves.")
+        g.last_draw_offer = move_no
+        g.log.append({"who": "you", "san": "offers a draw"})
+        accept, expected, cp = g.engine.consider_draw(g.board.copy())
+        g.log.append({"who": "nemesis", "kind": "reaction",
+                      "lines": commentary.draw_reply(accept, expected, cp, g.engine.mode, seed=g.board.fen())})
+        if accept:
+            g.reason = "Draw agreed."
+            finish(g, "1/2-1/2")
+        return state(g)
+
+    @app.get("/api/pgn/{game_id:path}")
+    def download_pgn(game_id: str) -> Response:
+        """A game as a .pgn file: the one being played (live id) or any stored game."""
+        if (g := games.get(game_id)) and not g.game_id:
+            pgn = build_pgn(g.player, g.human, [m.uci() for m in g.board.move_stack],
+                            g.result or "*", tc=g.tc, clocks=g.clocks)
+            text, name = str(pgn), pgn.headers
+        else:
+            row = store.game(g.game_id if g else game_id)
+            if row is None:
+                raise HTTPException(404, "no such game")
+            text = row.pgn
+            name = chess.pgn.read_headers(io.StringIO(text)) or {}
+        date = (name.get("UTCDate") or name.get("Date") or "").replace(".", "-").strip("-?")
+        parts = ["nemesis", date, name.get("White", "white"), "vs", name.get("Black", "black")]
+        filename = re.sub(r"[^A-Za-z0-9_.-]+", "_", "-".join(p for p in parts if p)) + ".pgn"
+        return Response(text + "\n", media_type="application/x-chess-pgn",
+                        headers={"Content-Disposition": f'attachment; filename="{filename}"'})
 
     @app.post("/api/games/{game_id}/flag")
     def flag(game_id: str) -> dict:
