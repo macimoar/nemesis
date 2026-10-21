@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "nemesis"
-version = "0.2.2"
+version = "0.3.0"
 description = "A personal chess engine: it learns how you play, then plays the move that beats you."
 readme = "README.md"
 requires-python = ">=3.10"
