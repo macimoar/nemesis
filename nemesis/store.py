@@ -98,9 +98,9 @@ CREATE INDEX IF NOT EXISTS puzzles_player ON puzzles(player);
 CREATE TABLE IF NOT EXISTS puzzle_attempts (
     puzzle_id TEXT NOT NULL,
     at        TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    move      TEXT NOT NULL,
+    move      TEXT NOT NULL,              -- the moves you tried, comma-separated
     solved    INTEGER NOT NULL,
-    hinted    INTEGER NOT NULL DEFAULT 0
+    hinted    INTEGER NOT NULL DEFAULT 0  -- how many hints you used
 );
 
 CREATE TABLE IF NOT EXISTS repairs (  -- opening habits worth unlearning, rebuilt on each training
@@ -349,11 +349,12 @@ class Store:
         with self._lock:
             rows = self.conn.execute("SELECT * FROM puzzles WHERE player=?", (player.lower(),)).fetchall()
             attempts = self.conn.execute(
-                "SELECT a.puzzle_id, a.solved, a.hinted FROM puzzle_attempts a JOIN puzzles p "
+                "SELECT a.puzzle_id, a.solved, a.hinted, a.move FROM puzzle_attempts a JOIN puzzles p "
                 "ON p.id=a.puzzle_id WHERE p.player=? ORDER BY a.rowid", (player.lower(),)).fetchall()
         tries: dict[str, list[dict]] = {}
         for a in attempts:
-            tries.setdefault(a["puzzle_id"], []).append({"solved": bool(a["solved"]), "hinted": bool(a["hinted"])})
+            tries.setdefault(a["puzzle_id"], []).append({"solved": bool(a["solved"]), "hints": a["hinted"],
+                                                         "tries": len([m for m in a["move"].split(",") if m])})
         return [{**{k: r[k] for k in ("id", "game_id", "ply", "fen", "solution")}, **json.loads(r["data"]),
                  "attempts": tries.get(r["id"], [])} for r in rows]
 
@@ -363,7 +364,7 @@ class Store:
         return None if r is None else {**{k: r[k] for k in ("id", "player", "game_id", "ply", "fen", "solution")},
                                        **json.loads(r["data"])}
 
-    def add_puzzle_attempt(self, pid: str, move: str, solved: bool, hinted: bool) -> None:
+    def add_puzzle_attempt(self, pid: str, move: str, solved: bool, hinted: int) -> None:
         with self._lock:
             self.conn.execute("INSERT INTO puzzle_attempts(puzzle_id, move, solved, hinted) VALUES (?,?,?,?)",
                               (pid, move, int(solved), int(hinted)))

@@ -85,7 +85,8 @@ class CommentaryReq(BaseModel):
 
 class AttemptReq(BaseModel):
     uci: str
-    hinted: bool = False
+    hints: int = 0
+    tried: list[str] = []
 
 
 class RepairAttemptReq(BaseModel):
@@ -514,7 +515,7 @@ def create_app(db: str | Path = DEFAULT_DB, depth: int = 10) -> FastAPI:
     @app.post("/api/puzzle/{puzzle_id:path}/attempt")
     def puzzle_attempt(puzzle_id: str, req: AttemptReq) -> dict:
         try:
-            return puzzles.attempt(store, puzzle_id, req.uci, req.hinted)
+            return puzzles.attempt(store, puzzle_id, req.uci, req.hints, req.tried)
         except KeyError:
             raise HTTPException(404, "No such puzzle")
 

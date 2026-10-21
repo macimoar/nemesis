@@ -376,7 +376,7 @@ function render() {
   }
   const pieces = parseFen(fen);
   if (pendingMove && !review) { applyPending(pieces, pendingMove); lastUci = pendingMove; }
-  if (puz && puz.tried) { applyPending(pieces, puz.tried); lastUci = puz.tried; }   // your wrong answer, briefly
+  if (puz && puz.wrong) { applyPending(pieces, puz.wrong); lastUci = puz.wrong; }   // your wrong answer, briefly
   const targets = new Set(selected && !review ? movesFrom(selected).map(u => u.slice(2, 4)) : []);
   const last = lastUci ? [lastUci.slice(0, 2), lastUci.slice(2, 4)] : [];
   const turn = puz ? puz.p.color : game ? game.turn : "white";
@@ -938,7 +938,7 @@ document.addEventListener("keydown", (e) => {
 // ---------------------------------------------------------------------------
 const THEME_NAMES = { mate: "Checkmate", fork: "Forks", material: "Winning material", defend: "Saving a piece",
                       threat: "Spotting threats", best: "Keeping the advantage" };
-let pzHinted = false, pzTimer = null;
+let pzHints = 0, pzTimer = null;
 
 async function loadPuzzles(player) {
   if (!player) { $("puzzles").innerHTML = `<p class="muted">Import your games first.</p>`; return; }
@@ -968,7 +968,7 @@ async function loadPuzzles(player) {
 // Both puzzles and opening repair use the board the same way: find a move, then see the line.
 const DRILLS = {
   puzzles: { next: (pl) => `/api/puzzles/${pl}/next`, key: "puzzle", load: () => loadPuzzles($("player").value),
-             attempt: (d, uci) => api(`/api/puzzle/${encodeURIComponent(d.p.id)}/attempt`, { uci, hinted: pzHinted }) },
+             attempt: (d, uci) => api(`/api/puzzle/${encodeURIComponent(d.p.id)}/attempt`, { uci, hints: pzHints, tried: d.misses }) },
   repairs: { next: (pl) => `/api/repairs/${pl}/next`, key: "spot", load: () => loadRepairs($("player").value),
              attempt: (d, uci) => api(`/api/repairs/${encodeURIComponent($("player").value)}/attempt`, { id: d.p.id, uci }) },
 };
@@ -987,8 +987,9 @@ async function nextDrill(kind, skip, opening) {
   if (!puzzle) return puz ? exitPuzzles() : DRILLS[kind].load();   // nothing left: back to the list
   if (review) exitReview();
   clearTimeout(pzTimer);
-  puz = { kind, opening, p: puzzle, result: null, shown: puzzle.fen, last: null };
-  pzHinted = false; selected = null; flipped = puzzle.color === "black";
+  puz = { kind, opening, p: puzzle, result: null, shown: puzzle.fen, last: null, misses: [], notes: [], tryNote: "" };
+  pzHints = 0; selected = null; flipped = puzzle.color === "black";
+  $("pz-hint").textContent = "Hint";
   $("playbar").classList.add("hidden"); $("reviewbar").classList.add("hidden"); $("puzzlebar").classList.remove("hidden");
   ["clock-top", "clock-bottom"].forEach(id => $(id).classList.add("hidden"));
   $("pz-hint").classList.remove("hidden"); $("pz-giveup").classList.remove("hidden");
@@ -997,18 +998,34 @@ async function nextDrill(kind, skip, opening) {
   const from = puzzle.opponent ? ` against ${escapeHtml(puzzle.opponent)}` : "";
   const when = puzzle.date ? ` on ${escapeHtml(puzzle.date)}` : "";
   const again = puzzle.status === "missed" ? " You missed this one before." : puzzle.status === "solved" ? " Review: you've solved this one." : "";
-  $("pz-now").innerHTML = `<b>${puzzle.color === "white" ? "White" : "Black"} to move. Find the best move.</b>
-    <br><span class="muted">From your game${from}${when}, move ${puzzle.move_number}.${again}</span>`;
+  puz.prompt = `<b>${puzzle.color === "white" ? "White" : "Black"} to move. Find the best move.</b>
+    <br><span class="muted">From your game${from}${when}, move ${puzzle.move_number}.${again}
+    You have ${puzzle.max_tries} tries.</span>`;
+  drawPrompt();
   render();
   showTab("puzzles");
   $("puzzles").innerHTML = `<h2>Puzzle</h2><p class="muted">You went wrong here in a real game. Take your time: there's no clock.</p>
     ${puzzle.chance != null ? `<p>Nemesis thinks you'd find this move <b>${pct(puzzle.chance)}</b> of the time.</p>` : ""}`;
 }
 
+function drawPrompt() {
+  const notes = [...puz.notes, puz.tryNote].filter(Boolean);
+  $("pz-now").innerHTML = puz.prompt + notes.map(n => "<br>" + n).join("");
+}
+
 async function answerPuzzle(uci) {
   pendingMove = null;
   puz.last = uci;
   const res = await DRILLS[puz.kind].attempt(puz, uci);
+  if (res.done === false) {   // wrong, but tries left: show it, then put the piece back
+    puz.misses.push(uci);
+    puz.tryNote = `<b class="bad">✗ ${escapeHtml(res.message)}</b>`;
+    drawPrompt();
+    sfx("end");
+    puz.wrong = uci; puz.intro = true; render();
+    pzTimer = setTimeout(() => { puz.wrong = null; puz.last = null; puz.intro = false; render(); }, 800);
+    return;
+  }
   showResult(res, uci);
 }
 
@@ -1021,7 +1038,7 @@ function showResult(res, uci) {
   $("pz-now").innerHTML = verdict + `<ul>${rest.map(l => `<li>${escapeHtml(l)}</li>`).join("")}</ul>`;
   sfx(res.solved ? "move" : "end");
   if (!res.solved && uci) {   // show your move briefly, then the solution
-    puz.tried = uci; render();
+    puz.wrong = uci; render();
     pzTimer = setTimeout(() => playLine(res), 900);
   } else playLine(res);
   $("pz-next").focus();
@@ -1038,7 +1055,7 @@ function playLine(res) {
     puz.shown = res.fens[i]; puz.last = res.line[i]; render();
     if (++i < res.fens.length) pzTimer = setTimeout(step, 900);
   };
-  puz.shown = puz.p.fen; puz.last = null; puz.tried = null; render();
+  puz.shown = puz.p.fen; puz.last = null; puz.wrong = null; render();
   pzTimer = setTimeout(step, 400);
 }
 
@@ -1090,7 +1107,8 @@ async function loadRepairs(player) {
 function startRepair(spot) {
   const side = spot.color === "white" ? "White" : "Black";
   const streak = spot.streak ? ` You've got it right ${spot.streak} time${spot.streak > 1 ? "s" : ""} in a row.` : "";
-  $("pz-now").innerHTML = `<b>${escapeHtml(spot.opening)}</b><br><span class="muted">Playing through your usual line…</span>`;
+  puz.prompt = `<b>${escapeHtml(spot.opening)}</b><br><span class="muted">Playing through your usual line…</span>`;
+  drawPrompt();
   $("repairs").innerHTML = `<h2>Opening repair</h2>
     <p>In ${spot.times} of the ${spot.visits} games where you reached this position, you played <b>${escapeHtml(spot.habit_san)}</b>, and it cost you.
     Find something better.${streak}</p>
@@ -1104,16 +1122,21 @@ function startRepair(spot) {
     if (!puz || puz.p !== spot) return;
     if (i < fens.length) { puz.shown = fens[i]; puz.last = line[i]; i++; render(); pzTimer = setTimeout(step, 350); return; }
     puz.intro = false; render();
-    $("pz-now").innerHTML = `<b>${escapeHtml(spot.opening)}, move ${spot.move_number}. ${side} to move.</b>
+    puz.prompt = `<b>${escapeHtml(spot.opening)}, move ${spot.move_number}. ${side} to move.</b>
       <br><span class="muted">You usually play ${escapeHtml(spot.habit_san)} here. Find a better move.</span>`;
+    drawPrompt();
   };
   pzTimer = setTimeout(step, 400);
 }
 
 $("pz-hint").onclick = () => {
-  pzHinted = true;
-  $("pz-now").insertAdjacentHTML("beforeend", `<br><span class="hint">Hint: ${escapeHtml(puz.p.hint)}</span>`);
-  $("pz-hint").classList.add("hidden");
+  // Puzzles have two hints: the idea, then what you played in the real game. Repairs have one.
+  const hints = [puz.p.hint, puz.p.hint2].filter(Boolean);
+  pzHints++;
+  puz.notes.push(`<span class="hint">${pzHints > 1 ? "Second hint" : "Hint"}: ${escapeHtml(hints[pzHints - 1])}</span>`);
+  drawPrompt();
+  $("pz-hint").textContent = "Second hint";
+  $("pz-hint").classList.toggle("hidden", pzHints >= hints.length);
 };
 $("pz-giveup").onclick = async () => {
   showResult(await DRILLS[puz.kind].attempt(puz, ""), "");

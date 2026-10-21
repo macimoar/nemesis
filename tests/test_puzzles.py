@@ -47,15 +47,30 @@ def test_training_mines_puzzles_and_attempts_are_recorded(store, analyzer):
     p = puzzles.next_puzzle(store, "me")
     shown = puzzles.public(p)
     assert "solution" not in shown and "line" not in shown and shown["hint"]
-    wrong = next(m.uci() for m in chess.Board(p["fen"]).legal_moves if m.uci() != p["solution"])
-    res = puzzles.attempt(store, p["id"], wrong)
-    assert not res["solved"] and res["explanation"][0].startswith("The move was")
+    assert shown["hint2"].startswith("In the game you played d3 here")
+    wrongs = [m.uci() for m in chess.Board(p["fen"]).legal_moves if m.uci() != p["solution"]][:3]
+    # Two wrong tries: told how many are left, nothing revealed or recorded.
+    res = puzzles.attempt(store, p["id"], wrongs[0])
+    assert res == {"done": False, "solved": False, "tries_left": 2, "message": res["message"]}
+    assert res["message"].startswith("Not ") and "2 tries left" in res["message"]
+    res = puzzles.attempt(store, p["id"], wrongs[1], tried=wrongs[:1])
+    assert not res["done"] and "1 try left" in res["message"]
+    assert puzzles.summary(store, "me")["new"] == s["total"]
+    # The third wrong try ends it.
+    res = puzzles.attempt(store, p["id"], wrongs[2], hints=2, tried=wrongs[:2])
+    assert res["done"] and not res["solved"] and res["explanation"][0].startswith("The move was")
     assert any("you played" in line for line in res["explanation"])
+    (a,) = store.puzzles("me")[0]["attempts"]
+    assert a == {"solved": False, "hints": 2, "tries": 3}
     assert puzzles.summary(store, "me")["missed"] == 1
-    res = puzzles.attempt(store, p["id"], p["solution"])
-    assert res["solved"]
+    # Next time: right on the second try.
+    res = puzzles.attempt(store, p["id"], p["solution"], tried=wrongs[:1])
+    assert res["solved"] and res["explanation"][0].startswith("Correct on your second try")
     s = puzzles.summary(store, "me")
     assert s["solved"] == 1 and s["first_try"] == 0
+    # Giving up ends it at once.
+    res = puzzles.attempt(store, p["id"], "")
+    assert res["done"] and not res["solved"]
     # Retraining doesn't duplicate puzzles.
     _, metrics = train(store, "me", analyzer)
     assert metrics["new_puzzles"] == 0

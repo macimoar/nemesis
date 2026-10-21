@@ -21,6 +21,7 @@ MIN_GAP = 100        # the solution beats every other move by at least this much
 ALSO_GOOD = 50       # moves within this of the best are also accepted
 LOST = -300          # skip positions that were already lost whatever you played
 LINE_PLIES = 5
+MAX_TRIES = 3        # wrong moves allowed before the solution is shown
 
 THEMES = {
     "mate": "There's a checkmate.",
@@ -205,7 +206,8 @@ def summary(store: Store, player: str) -> dict:
     counts = {"new": 0, "solved": 0, "missed": 0}
     for p in puzzles:
         counts[status(p)] += 1
-    first_try = [p["attempts"][0]["solved"] for p in puzzles if p["attempts"]]
+    first_try = [p["attempts"][0]["solved"] and p["attempts"][0]["tries"] == 1
+                 for p in puzzles if p["attempts"]]
     themes: dict[str, int] = {}
     for p in puzzles:
         for t in p["themes"]:
@@ -238,20 +240,30 @@ def public(p: dict) -> dict:
         legal.setdefault(chess.square_name(m.from_square), []).append(m.uci())
     return {"id": p["id"], "fen": p["fen"], "color": p["color"], "move_number": p["move_number"],
             "opponent": p.get("opponent"), "date": p.get("date"), "status": status(p),
-            "chance": p.get("chance"), "hint": THEMES[p["themes"][0]], "legal": legal,
-            "check": board.is_check()}
+            "chance": p.get("chance"), "hint": THEMES[p["themes"][0]], "hint2": second_hint(p),
+            "legal": legal, "check": board.is_check(), "max_tries": MAX_TRIES}
 
 
-def explain(p: dict, solved: bool, uci: str = "") -> list[str]:
+def second_hint(p: dict) -> str:
+    """What you played in the real game, and what was wrong with it."""
+    why = p["wrong"] if p.get("wrong") else f"it cost about {p['loss'] / 100:.1f} pawns"
+    return f"In the game you played {p['played_san']} here. It's not that: {why}."
+
+
+ORDINAL = {1: "", 2: " on your second try", 3: " on your third try"}
+
+
+def explain(p: dict, solved: bool, uci: str = "", tries: int = 1) -> list[str]:
     """Plain-English lines shown after you answer."""
     who = f"against {p['opponent']}" if p.get("opponent") else "in one of your games"
     when = f" on {p['date']}" if p.get("date") else ""
     lines = []
     if solved and uci != p["solution"]:
         san = chess.Board(p["fen"]).san(chess.Move.from_uci(uci))
-        lines.append(f"Correct: {san} works too. The engine's top choice was {p['solution_san']}.")
+        lines.append(f"Correct{ORDINAL.get(tries, '')}: {san} works too. "
+                     f"The engine's top choice was {p['solution_san']}.")
     elif solved:
-        lines.append(f"Correct: {p['solution_san']}.")
+        lines.append(f"Correct{ORDINAL.get(tries, '')}: {p['solution_san']}.")
     else:
         lines.append(f"The move was {p['solution_san']}.")
     wrong = f", and {p['wrong']}" if p.get("wrong") else ""
@@ -264,21 +276,33 @@ def explain(p: dict, solved: bool, uci: str = "") -> list[str]:
     return lines
 
 
-def attempt(store: Store, pid: str, uci: str, hinted: bool = False) -> dict:
-    """Check an answer. The first attempt at each showing of a puzzle is what counts."""
+def attempt(store: Store, pid: str, uci: str, hints: int = 0, tried: list[str] | None = None) -> dict:
+    """Check one try. `tried` are your earlier wrong moves at this showing of the puzzle;
+    an empty `uci` means you gave up. Until it's solved or the tries run out, nothing
+    about the solution is revealed and nothing is recorded."""
     p = store.puzzle(pid)
     if p is None:
         raise KeyError(pid)
-    solved = uci == p["solution"] or uci in p.get("also", [])
-    store.add_puzzle_attempt(pid, uci, solved, hinted)
+    tried = [u for u in (tried or []) if u][:MAX_TRIES - 1]
+    solved = bool(uci) and (uci == p["solution"] or uci in p.get("also", []))
+    moves = tried + ([uci] if uci else [])
+    if uci and not solved and len(moves) < MAX_TRIES:
+        left = MAX_TRIES - len(moves)
+        board = chess.Board(p["fen"])
+        move = chess.Move.from_uci(uci)
+        san = board.san(move) if move in board.legal_moves else uci
+        return {"done": False, "solved": False, "tries_left": left,
+                "message": f"Not {san}. {left} {'tries' if left > 1 else 'try'} left."}
+    store.add_puzzle_attempt(pid, ",".join(moves), solved, hints)
     # The line to replay on the board: your move if it was an alternative that also works,
     # otherwise the solution and what follows.
-    line = [uci] if uci in p.get("also", []) else p["line"]
+    line = [uci] if solved and uci in p.get("also", []) else p["line"]
     board = chess.Board(p["fen"])
     fens = []
     for u in line:
         board.push(chess.Move.from_uci(u))
         fens.append(board.fen())
-    return {"solved": solved, "solution": p["solution"], "line": line, "fens": fens,
-            "line_san": p["line_san"], "themes": p["themes"], "explanation": explain(p, solved, uci),
-            "also_good": uci in p.get("also", [])}
+    return {"done": True, "solved": solved, "solution": p["solution"], "line": line, "fens": fens,
+            "line_san": p["line_san"], "themes": p["themes"],
+            "explanation": explain(p, solved, uci, len(moves)),
+            "also_good": solved and uci in p.get("also", [])}
