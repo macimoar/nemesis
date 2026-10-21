@@ -70,5 +70,5 @@ def test_doppelganger_game_in_the_app(tmp_path, analyzer, monkeypatch):
     gid = g["game_id"]
     assert c.get("/api/ratings/me").json() and Store(db).rating_change(gid) == {}
     assert "Doppelgänger of rival" in c.get(f"/api/pgn/{gid}").text
-    listed = c.get("/api/games/list/me").json()
-    assert listed[0]["opponent"] == "Doppelgänger of rival"
+    listed = {x["id"]: x for x in c.get("/api/games/list/me").json()}
+    assert listed[gid]["opponent"] == "Doppelgänger of rival"
