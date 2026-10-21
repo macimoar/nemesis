@@ -245,7 +245,7 @@
     </div>
 
     <div id="tab-thinking" class="hidden">
-      <h2>Last decision</h2>
+      <h2>Latest</h2>
       <div id="thinking"><p class="muted">Once Nemesis moves, the options it weighed appear here, with its chances for each one if you play perfectly and against you specifically.</p></div>
     </div>
   </section>
@@ -357,17 +357,31 @@ function speech(lines) {
 }
 
 function showThinking() {
-  if (game.commentary === "poker") {
-    $("thinking").innerHTML = `<p class="muted">Nemesis isn't telling. Switch commentary to X-Ray to see its reasoning.</p>`;
+  // Latest first: Nemesis's reaction to your last move, then its reply.
+  const log = game.log;
+  const ri = log.map(e => e.kind).lastIndexOf("reaction");
+  const mi = log.map(e => e.kind).lastIndexOf("move");
+  let html = "";
+  if (ri >= 0) {
+    const you = log[ri - 1] && log[ri - 1].who === "you" ? log[ri - 1].san : "";
+    html += `<div class="msg reaction"><b>Your move${you ? ": " + you : ""}</b>${speech(log[ri].lines)}</div>`;
+  }
+  if (mi > ri || (mi >= 0 && ri < 0)) {  // Nemesis has replied since (it hasn't yet if the game just ended)
+    html += `<div class="msg nemesis" style="margin-top:8px"><b>Nemesis plays ${log[mi].san}</b>${speech(log[mi].lines)}</div>`;
+  }
+  if (!html) {
+    $("thinking").innerHTML = `<p class="muted">Once you're playing, Nemesis's reaction to your move and its own reasoning appear here.</p>`;
     return;
   }
-  const m = [...game.log].reverse().find(e => e.candidates);
-  if (!m) return;
-  const rows = m.candidates.map(c => `<tr><td>${c.san}</td><td class="n">${pct(c.objective)}</td><td class="n">${pct(c.exploit)}</td></tr>`).join("");
-  $("thinking").innerHTML = `${speech(m.lines)}
-    <h3>Options Nemesis weighed</h3>
-    <table><tr><th>Move</th><th class="n">Its chances if you play perfectly</th><th class="n">Its chances against you</th></tr>${rows}</table>
-    <p class="muted">"Against you" assumes you play the way your profile predicts. The risk dial decides how much that counts, and how far Nemesis may stray from the objectively best move.</p>`;
+  if (game.commentary === "poker") {
+    html += `<p class="muted" style="margin-top:12px">Poker Face: Nemesis keeps its reasoning to itself. Switch commentary to X-Ray to see it.</p>`;
+  } else if (mi >= 0 && log[mi].candidates) {
+    const rows = log[mi].candidates.map(c => `<tr><td>${c.san}</td><td class="n">${pct(c.objective)}</td><td class="n">${pct(c.exploit)}</td></tr>`).join("");
+    html += `<h3>Options Nemesis weighed</h3>
+      <table><tr><th>Move</th><th class="n">Its chances if you play perfectly</th><th class="n">Its chances against you</th></tr>${rows}</table>
+      <p class="muted">"Against you" assumes you play the way your profile predicts. The risk dial decides how much that counts, and how far Nemesis may stray from the objectively best move.</p>`;
+  }
+  $("thinking").innerHTML = html;
 }
 
 const pct = (x) => x == null ? "–" : (100 * x).toFixed(0) + "%";
