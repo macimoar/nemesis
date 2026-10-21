@@ -163,9 +163,6 @@ packaging/      PyInstaller spec, smoke test, per-OS "READ ME FIRST" notes
 tests/
 ```
 
-## Ideas for next steps
+## Roadmap
 
-- Use a Maia network as the population prior for stronger move prediction.
-- Add motif detectors: pins, skewers, back-rank weaknesses, discovered attacks.
-- Model time usage, so Nemesis plays fast in positions where you burn clock.
-- Add online play through the Lichess Bot API, so it can challenge you where you already play.
+What comes next, and what would make it v1.0: see [ROADMAP.md](ROADMAP.md).
