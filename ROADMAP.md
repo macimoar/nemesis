@@ -4,7 +4,7 @@ Nemesis learns how you play, then plays the move most likely to beat *you*.
 This is the plan from here: first make sure that idea works on real players,
 then turn what Nemesis knows about you into training, then make the model sharper.
 
-Shipped so far (v0.1.x): personal move model, exploit search with a risk dial,
+Shipped first (v0.1.x): personal move model, exploit search with a risk dial,
 X-Ray / Poker Face commentary, beatable strength ("match me"), ratings per risk
 tier, game review, and a download-and-run app for Windows, macOS and Linux.
 
@@ -39,14 +39,19 @@ Nemesis knows your weaknesses, so it can drill them.
 - ✅ **Doppelgänger mode.** The model that predicts your moves can also play like any
   imported player. Import a friend's or rival's games and practise against their style.
 
-## v0.4 — A sharper model
+## v0.4 — Sharper blind spots
 
 - ✅ **More tactical patterns:** pins, skewers, back-rank weaknesses and discovered
   attacks, alongside forks and hanging pieces, for finer-grained blind spots.
-- ✅ **A stronger human-move base:** start from a Maia network (trained on millions of
-  human games per rating level) instead of the generic prior, so predictions are
-  good even for new players.
-- **A profile per time control:** most people play differently in bullet and rapid.
+
+## v0.5 — Human-like predictions
+
+- ✅ **A stronger human-move base:** Nemesis starts from Maia-2, a network trained on
+  millions of human games, instead of a generic prior, so predictions are good even
+  for new players. On one real player's newest games it lifted exact-move prediction
+  from 46% to 56%, and from 43% to 56% before seeing any of their games.
+- **A profile per time control:** most people play differently in bullet and rapid
+  (Maia-2 already has separate rapid and blitz models).
 
 ## Later
 
