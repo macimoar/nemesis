@@ -1,0 +1,50 @@
+name: Maia-2 models
+
+# Downloads the official Maia-2 rapid and blitz models (MIT licence, from the authors'
+# Google Drive), converts them to ONNX with scripts/convert_maia2.py, checks the ONNX
+# copies give the same answers as the originals, and publishes them as a GitHub Release
+# that Nemesis downloads on first use. Run manually when the conversion changes.
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag for the converted models"
+        required: true
+        default: "maia2-onnx-v1"
+
+permissions:
+  contents: write
+
+jobs:
+  convert:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install
+        run: |
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
+          pip install maia2 onnx onnxruntime
+      - name: Convert and check
+        run: python scripts/convert_maia2.py --out maia2-onnx
+      - name: Show the check results
+        run: cat maia2-onnx/report.json
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.tag }}
+          target_commitish: ${{ github.sha }}
+          name: Maia-2 models (ONNX)
+          prerelease: true
+          body: |
+            The Maia-2 rapid and blitz models (https://github.com/CSSLab/maia2, MIT licence,
+            Copyright (c) 2024 CSSLab), converted to ONNX for Nemesis. `-int8` files are
+            quantised (about 4x smaller). report.json has the checks against the originals.
+          files: |
+            maia2-onnx/*.onnx
+            maia2-onnx/moves.json
+            maia2-onnx/LICENSE-maia2.txt
+            maia2-onnx/report.json
+            maia2-onnx/SHA256SUMS
