@@ -29,6 +29,8 @@ FEATURES = [
     "allows_pin", "allows_skewer", "allows_discovered", "allows_back_rank",
     # repertoire
     "book_freq", "book_deviation",
+    # how likely a human at this rating is to play the move (Maia-2's log-probability)
+    "maia",
     # context interactions
     "time_pressure_x_loss", "time_pressure_x_best", "endgame_x_loss", "losing_x_loss",
     "losing_x_sacrifice", "winning_x_trade",
@@ -79,6 +81,7 @@ def position_key(board: chess.Board) -> str:
 class Context:
     clock: float | None = None      # mover's seconds remaining before the move
     best_cp: int = 0                # eval of the position for the mover
+    maia: dict | None = None        # Maia-2's {uci: probability} for this player, if available
 
 
 def _attackers_min(board: chess.Board, color: chess.Color, sq: chess.Square) -> int | None:
@@ -339,6 +342,9 @@ def position_features(
                     f[INDEX["allows_" + t]] = t in tactics
         finally:
             board.pop()
+
+        if ctx.maia:
+            f[INDEX["maia"]] = max(math.log(max(ctx.maia.get(uci, 0.0), 1e-9)), -9.0)
 
         if repertoire and book_total:
             freq = repertoire.freq(key, uci)

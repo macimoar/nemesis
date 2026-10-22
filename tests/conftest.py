@@ -1,5 +1,9 @@
+import os
+
 import chess
 import pytest
+
+os.environ.setdefault("NEMESIS_NO_MAIA", "1")   # tests never download the Maia-2 models
 
 from nemesis.features import VALUE
 from nemesis.store import Store

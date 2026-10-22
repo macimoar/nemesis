@@ -9,7 +9,7 @@ from typing import Callable
 import chess
 import chess.pgn
 
-from nemesis import puzzles, ratings, repairs, timecontrol
+from nemesis import maia, puzzles, ratings, repairs, timecontrol
 from nemesis.analysis.stockfish import Analyzer
 from nemesis.ingest.pgn import to_rows
 from nemesis.profile.move_model import MoveModel, build_samples, train_player, train_population
@@ -24,7 +24,10 @@ def train(store: Store, player: str, analyzer: Analyzer, max_games: int | None =
     """Analyse the player's games, fit their model, and store the model with its profile."""
     player = player.lower()
     tree = OpeningTree.from_store(store, player)
-    samples = build_samples(store, player, analyzer, tree=tree, max_games=max_games, progress=progress)
+    # Maia-2 (downloaded the first time) gives every player a strong human-move starting point.
+    maia_for = (lambda kind: maia.get(kind)) if maia.get("rapid") is not None else None
+    samples = build_samples(store, player, analyzer, tree=tree, max_games=max_games, progress=progress,
+                            maia_for=maia_for)
     model, metrics = train_player(store, player, samples)
     metrics["profile"] = style_profile(store, player, model, samples)
     store.save_model(player, model.to_dict(), metrics)

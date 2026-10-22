@@ -12,7 +12,7 @@ import random
 
 import chess
 
-from nemesis import commentary
+from nemesis import commentary, maia, ratings
 from nemesis.analysis.stockfish import Analyzer, impute_losses, win_prob
 from nemesis.engine import search_settings
 from nemesis.features import Context, position_features
@@ -29,13 +29,15 @@ def label(name: str) -> str:
 
 class Doppelganger:
     def __init__(self, store: Store, name: str, analyzer: Analyzer, mode: str = commentary.XRAY,
-                 seed: int | None = None):
+                 seed: int | None = None, tc: str = "untimed", opponent_elo: float | None = None):
         self.store, self.analyzer = store, analyzer
         self.name = name.lower()
-        self.model = load_player_model(store, self.name)
+        self.model = load_player_model(store, self.name, with_maia=maia.get("rapid", allow_download=False) is not None)
         self.tree = OpeningTree.from_store(store, self.name)
         self.rng = random.Random(seed)
         self.mode = commentary.normalise_mode(mode)
+        self.tc = tc                      # time-control category: picks Maia's rapid or blitz model
+        self.opponent_elo = opponent_elo  # your rating, which Maia-2 also takes into account
 
     def _book(self, board: chess.Board) -> tuple[dict[str, int], int]:
         """Their moves from this position in the opening, and how many games they had here."""
@@ -64,7 +66,13 @@ class Doppelganger:
         lines = self.analyzer.lines(board, multipv=multipv, depth=depth)
         losses = impute_losses(board, lines)
         best = max(lines.values()) if lines else 0
-        legal, X = position_features(board, losses, self.tree, Context(clock=own_clock, best_cp=best))
+        human = None
+        model = maia.get(maia.kind_for(self.tc), allow_download=False)
+        if model is not None:
+            offset = maia.rating_offset(self.store, self.name)
+            me = ratings.player_rating(self.store, self.name, self.tc)[0] + offset
+            human = model.policy(board, me, self.opponent_elo + offset if self.opponent_elo else me)
+        legal, X = position_features(board, losses, self.tree, Context(clock=own_clock, best_cp=best, maia=human))
         probs = self.model.probs(X)
         i = self.rng.choices(range(len(legal)), weights=probs)[0]
         move = legal[i]

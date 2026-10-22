@@ -21,7 +21,7 @@ from pydantic import BaseModel
 
 from nemesis.analysis.install import ensure_stockfish
 from nemesis.analysis.stockfish import StockfishAnalyzer
-from nemesis import commentary, puzzles, ratings, repairs, timecontrol
+from nemesis import commentary, maia, puzzles, ratings, repairs, timecontrol
 from nemesis import doppelganger
 from nemesis.doppelganger import Doppelganger
 from nemesis.engine import Nemesis
@@ -148,7 +148,7 @@ class Game:
 def create_app(db: str | Path = DEFAULT_DB, depth: int = 10) -> FastAPI:
     store = Store(db)
     # Stockfish starts lazily: on a fresh computer it may need downloading first.
-    setup = {"stockfish": "checking", "message": "", "progress": 0.0}
+    setup = {"stockfish": "checking", "message": "", "progress": 0.0, "maia": "checking", "maia_progress": 0.0}
     holder: dict[str, StockfishAnalyzer] = {}
     ready = threading.Lock()
 
@@ -166,9 +166,18 @@ def create_app(db: str | Path = DEFAULT_DB, depth: int = 10) -> FastAPI:
                 setup.update(stockfish="ready", message="", progress=1.0, engine=path)
             return holder["a"]
 
+    def get_maia() -> None:
+        """Fetch the Maia-2 human-move models in the background (first launch only).
+        Nemesis works without them, just with less accurate predictions until they arrive."""
+        def progress(msg: str, frac: float) -> None:
+            setup.update(maia="downloading", maia_progress=frac)
+        found = [maia.get(kind, progress=progress) for kind in ("rapid", "blitz")]
+        setup.update(maia="ready" if all(found) else "unavailable", maia_progress=1.0)
+
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         threading.Thread(target=lambda: _quietly(get_analyzer), daemon=True).start()
+        threading.Thread(target=lambda: _quietly(get_maia), daemon=True).start()
         yield
         if "a" in holder:
             holder["a"].close()
@@ -196,6 +205,9 @@ def create_app(db: str | Path = DEFAULT_DB, depth: int = 10) -> FastAPI:
         if setup["stockfish"] != "ready":
             job.message = "Getting Stockfish ready (first launch only)…"
         analyzer = get_analyzer()
+        if maia.get("rapid", allow_download=False) is None:
+            job.message = "Getting the human-move model ready (first time only)…"
+            maia.get("rapid", progress=lambda msg, frac: setattr(job, "message", f"{msg}… {frac:.0%}"))
         started = time.monotonic()
         _, metrics = train(store, job.player, analyzer, progress=progress)
         found = metrics.get("new_puzzles", 0)
@@ -410,7 +422,9 @@ def create_app(db: str | Path = DEFAULT_DB, depth: int = 10) -> FastAPI:
         if req.opponent:
             if store.load_model(req.opponent.lower()) is None:
                 raise HTTPException(400, f"{req.opponent} hasn't been studied yet: import their games first.")
-            g.doppel = Doppelganger(store, req.opponent, engine.analyzer, mode=req.commentary)
+            cat = timecontrol.category(tc)
+            g.doppel = Doppelganger(store, req.opponent, engine.analyzer, mode=req.commentary, tc=cat,
+                                    opponent_elo=ratings.player_rating(store, g.player, cat)[0])
         if tc:
             g.clock = {chess.WHITE: tc.base, chess.BLACK: tc.base}
         g.turn_started = time.monotonic()

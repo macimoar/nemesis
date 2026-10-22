@@ -93,7 +93,8 @@ class Searcher:
     def __init__(self, analyzer: Analyzer, model: MoveModel, tree: OpeningTree | None = None,
                  risk: float = 0.5, multipv: int = 6, root_multipv: int = 8, deep: bool = False,
                  elo: float | None = None, rng: random.Random | None = None,
-                 depth: int | None = None, deadline: float | None = None):
+                 depth: int | None = None, deadline: float | None = None,
+                 maia=None, maia_elos: tuple[float | None, float | None] = (None, None)):
         self.analyzer = analyzer
         self.model = model
         self.tree = tree
@@ -105,6 +106,8 @@ class Searcher:
         self.rng = rng or random.Random()
         self.depth = depth          # Stockfish depth override (shallower when short on time)
         self.deadline = deadline    # time.monotonic() by which a move must be chosen
+        self.maia = maia            # Maia-2 model: how a human at the player's rating plays
+        self.maia_elos = maia_elos  # (player, opponent) on Lichess's rating scale
 
     def _lines(self, board: chess.Board, multipv: int, extra=()) -> dict[str, int]:
         if self.depth is None:
@@ -119,7 +122,8 @@ class Searcher:
         """Predicted distribution over the human's moves, with an eval for each."""
         lines = self._lines(board, self.multipv)
         best = max(lines.values()) if lines else 0
-        ctx = Context(clock=clock, best_cp=best)
+        human = self.maia.policy(board, *self.maia_elos) if self.maia is not None else None
+        ctx = Context(clock=clock, best_cp=best, maia=human)
         losses = impute_losses(board, lines)
         moves, X = position_features(board, losses, self.tree, ctx)
         p = self.model.probs(X)

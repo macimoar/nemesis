@@ -17,6 +17,7 @@ from typing import Callable
 import chess
 import numpy as np
 
+from nemesis import maia
 from nemesis.analysis.stockfish import Analyzer, impute_losses
 from nemesis.features import FEATURES, INDEX, N_FEATURES, Context, _phase, position_features, position_key
 from nemesis.profile.repertoire import OpeningTree
@@ -29,12 +30,21 @@ DEFAULT_PRIOR = {
     "time_pressure_x_loss": 0.5, "endgame_x_loss": 0.2, "hangs_piece": -0.3,
 }
 
+# With Maia-2: start from "plays like a human at your rating", plus what Maia-2 can't
+# know (your repertoire, how you handle time trouble). Its predictions already account
+# for move quality, so the generic quality weights would only count it twice.
+MAIA_PRIOR = {"maia": 1.0, "book_freq": 1.2, "book_deviation": -0.3, "time_pressure_x_loss": 0.5}
+
 POPULATION = "__population__"
 
 
 def prior_vector(prior: dict[str, float] | None = None) -> np.ndarray:
     prior = DEFAULT_PRIOR if prior is None else prior
     return np.array([prior.get(name, 0.0) for name in FEATURES])
+
+
+def uses_maia(samples: list["Sample"]) -> bool:
+    return any(s.X[:, INDEX["maia"]].any() for s in samples[:50])
 
 
 @dataclass
@@ -70,6 +80,7 @@ class LeaveOneOut:
 # ---------------------------------------------------------------------------
 
 SAMPLES_VERSION = 2  # bump when features change, so cached samples are recomputed
+MAIA_VERSION = 1     # samples built with Maia-2's predictions are cached under their own key
 _BOOK_FREQ, _BOOK_DEV = INDEX["book_freq"], INDEX["book_deviation"]
 
 
@@ -118,12 +129,19 @@ def build_samples(
     max_games: int | None = None,
     halflife_games: float = 150.0,
     progress: Callable[[int, int], None] | None = None,
+    maia_for: Callable[[str], object] | None = None,
 ) -> list[Sample]:
+    """Every position the player faced, with features for each legal move. `maia_for(kind)`
+    returns the Maia-2 model for "rapid" or "blitz" (or None); with it, each move also gets
+    how likely a human at the player's rating is to play it."""
     games = store.games(player)
     if max_games:
         games = games[-max_games:]
     tree = tree or OpeningTree.from_store(store, player)
     depth = getattr(analyzer, "depth", 0)
+    version = SAMPLES_VERSION * 100 + MAIA_VERSION if maia_for else SAMPLES_VERSION
+    offset = maia.rating_offset(store, player) if maia_for else 0
+    seed_elo = None
     samples: list[Sample] = []
     n = len(games)
     for gi, game in enumerate(games):
@@ -133,7 +151,7 @@ def build_samples(
         moves = store.moves(game.id)
         own = {(position_key(chess.Board(m.fen)), m.uci) for m in moves[:24] if m.is_player}
         book = LeaveOneOut(tree, own)
-        cached = store.get_samples(game.id, SAMPLES_VERSION, depth)
+        cached = store.get_samples(game.id, version, depth)
         if cached is not None:
             # A game's features never change, except the opening-book ones (your repertoire
             # grows with every game), which are cheap to refresh.
@@ -146,6 +164,20 @@ def build_samples(
             continue
         game_samples: list[Sample] = []
         last_clock: float | None = None
+        policies: dict[int, dict] = {}
+        model = maia_for(maia.game_kind(game)) if maia_for else None
+        if model is not None:
+            mine, theirs = maia.game_elos(game)
+            if mine is None:   # games against Nemesis: the player's rating then
+                if seed_elo is None:
+                    from nemesis import ratings
+                    seed_elo = ratings.player_rating(store, player)[0]
+                mine = seed_elo
+            theirs = theirs if theirs is not None else mine
+            mover = [m for m in moves if m.is_player]
+            for m, pol in zip(mover, model.policies([chess.Board(m.fen) for m in mover],
+                                                    mine + offset, theirs + offset)):
+                policies[m.ply] = pol
         for m in moves:
             if not m.is_player:
                 continue
@@ -156,7 +188,7 @@ def build_samples(
             lines = analyzer.lines(board, multipv=multipv, extra=[m.uci])
             losses = impute_losses(board, lines)
             best = max(lines.values()) if lines else 0
-            ctx = Context(clock=clock_before, best_cp=best)
+            ctx = Context(clock=clock_before, best_cp=best, maia=policies.get(m.ply))
             legal, X = position_features(board, losses, book, ctx)
             ucis = [mv.uci() for mv in legal]
             if m.uci not in ucis:
@@ -167,7 +199,7 @@ def build_samples(
                 time_pressure=clock_before is not None and clock_before < 30, moves=ucis,
                 key=position_key(board),
             ))
-        store.put_samples(game.id, SAMPLES_VERSION, depth, *pack_samples(game_samples))
+        store.put_samples(game.id, version, depth, *pack_samples(game_samples))
         samples.extend(game_samples)
         if progress:
             progress(gi + 1, n)
@@ -293,7 +325,10 @@ def train_player(store: Store, player: str, samples: list[Sample], l2: float = 4
     """Fit on older games, report accuracy on the newest, then refit on everything and save."""
     player = player.lower()
     pop = store.load_model(POPULATION)
-    prior = MoveModel.from_dict(pop[0]).w if pop else prior_vector()
+    if uses_maia(samples):
+        prior = prior_vector(MAIA_PRIOR)
+    else:
+        prior = MoveModel.from_dict(pop[0]).w if pop else prior_vector()
 
     train, test = split_by_game(samples)
     metrics: dict = {"samples": len(samples), "games": len({s.game_id for s in samples})}
@@ -315,6 +350,13 @@ def train_population(store: Store, samples: list[Sample]) -> MoveModel:
     return model
 
 
-def load_player_model(store: Store, player: str) -> MoveModel:
-    found = store.load_model(player.lower()) or store.load_model(POPULATION)
+def load_player_model(store: Store, player: str, with_maia: bool = False) -> MoveModel:
+    """The player's trained model. Someone not studied yet gets the starting model: Maia-2's
+    "a human at your rating" when it's available, the generic club player otherwise."""
+    found = store.load_model(player.lower())
+    if found:
+        return MoveModel.from_dict(found[0])
+    if with_maia:
+        return MoveModel(prior_vector(MAIA_PRIOR))
+    found = store.load_model(POPULATION)
     return MoveModel.from_dict(found[0]) if found else MoveModel()

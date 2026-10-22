@@ -7,7 +7,7 @@ import time
 
 import chess
 
-from nemesis import commentary, ratings
+from nemesis import commentary, maia, ratings
 from nemesis.analysis.stockfish import Analyzer, StockfishAnalyzer, impute_losses
 from nemesis.profile.move_model import load_player_model
 from nemesis.profile.repertoire import OpeningTree
@@ -46,7 +46,8 @@ class Nemesis:
 
     def set_player(self, player: str) -> None:
         self.player = player.lower()
-        self.model = load_player_model(self.store, self.player)
+        has_maia = maia.get(maia.kind_for(self.tc), allow_download=False) is not None
+        self.model = load_player_model(self.store, self.player, with_maia=has_maia)
         self.tree = OpeningTree.from_store(self.store, self.player)
 
     def reload(self) -> None:
@@ -59,7 +60,8 @@ class Nemesis:
         searcher = Searcher(self.analyzer, self.model, self.tree, risk=self.risk, deep=deep,
                             elo=self.target_elo(), rng=self.rng, depth=depth,
                             multipv=multipv, root_multipv=root_multipv,
-                            deadline=None if budget is None else time.monotonic() + 0.8 * budget)
+                            deadline=None if budget is None else time.monotonic() + 0.8 * budget,
+                            **self._maia())
         decision = searcher.choose(board, human_clock)
         decision.lines = commentary.before(board, decision, self.mode)
         return decision
@@ -72,12 +74,22 @@ class Nemesis:
         against perfect play. It declines while it expects to come out ahead, and takes the
         draw when it's worse, or when the game is a dead-level endgame.
         """
-        searcher = Searcher(self.analyzer, self.model, self.tree, risk=self.risk, elo=None, rng=self.rng)
+        searcher = Searcher(self.analyzer, self.model, self.tree, risk=self.risk, elo=None, rng=self.rng,
+                            **self._maia())
         expected, replies = searcher.human_value(board, 1)
         cp = -max((r.cp for r in replies), default=0)   # its eval: your best reply, from its side
         major = sum(len(board.pieces(t, c)) for t in (chess.QUEEN, chess.ROOK) for c in chess.COLORS)
         dead_level = abs(cp) <= 25 and major <= 2 and board.fullmove_number >= 30
         return expected <= 0.45 or dead_level, expected, cp
+
+    def _maia(self) -> dict:
+        """Maia-2 for predicting your moves, if it's been downloaded (never waits for it)."""
+        model = maia.get(maia.kind_for(self.tc), allow_download=False)
+        if model is None:
+            return {}
+        offset = maia.rating_offset(self.store, self.player)
+        you = ratings.player_rating(self.store, self.player, self.tc)[0]
+        return {"maia": model, "maia_elos": (you + offset, self.target_elo() + offset)}
 
     def target_elo(self) -> float:
         return ratings.target_elo(self.store, self.player, self.fixed_elo, self.tc)
