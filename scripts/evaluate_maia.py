@@ -27,13 +27,10 @@ from nemesis import maia
 from nemesis.analysis.stockfish import StockfishAnalyzer
 from nemesis.features import INDEX
 from nemesis.ingest.pgn import import_pgn_text
-from nemesis.profile.move_model import DEFAULT_PRIOR, MoveModel, build_samples, evaluate, prior_vector
+from nemesis.profile.move_model import MAIA_PRIOR, MoveModel, build_samples, evaluate, prior_vector
 from nemesis.store import Store
 
 OFFSETS = (0, 100, 200, 300, 400, 500, 600)
-# With Maia-2 as a feature, the generic quality features mostly duplicate it: start from
-# "trust Maia-2", keep the repertoire and time-pressure habits.
-MAIA_PRIOR = {"maia": 1.0, "book_freq": 1.2, "book_deviation": -0.3, "time_pressure_x_loss": 0.5}
 
 
 def models_from(directory: Path):
@@ -55,9 +52,9 @@ def split(store: Store, player: str, test_frac: float = 0.25) -> tuple[set[str],
 
 
 def maia_only(samples) -> dict:
-    """Maia-2's own predictions: only its feature, weight 1 (the softmax gives back its probabilities)."""
+    """Maia-2's own predictions: only its features, weight 1 (the softmax gives back its probabilities)."""
     w = np.zeros(len(prior_vector()))
-    w[INDEX["maia"]] = 1.0
+    w[INDEX["maia"]] = w[INDEX["maia_early"]] = 1.0
     return evaluate(MoveModel(w), samples)
 
 
@@ -121,7 +118,7 @@ def main() -> None:
     te = lambda ss: [s for s in ss if s.game_id in test_ids]    # noqa: E731
     print(f"{len(tr(plain))} of your moves to train on, {len(te(plain))} to test on\n")
 
-    maia_prior = np.array([MAIA_PRIOR.get(n, 0.0) for n in INDEX])
+    maia_prior = prior_vector(MAIA_PRIOR)
     results = {
         "Stockfish's best move": None,
         "BEFORE  generic starting model": evaluate(MoveModel(prior_vector()), te(plain)),

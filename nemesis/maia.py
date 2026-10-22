@@ -29,6 +29,9 @@ DIR = Path(os.environ.get("NEMESIS_HOME", Path.home() / ".nemesis")) / "maia2"
 HALF = True          # fp16 weights: half the download (43 MB), the same predictions
 # Maia-2 groups ratings in 100-point buckets from 1100 to 2000 (Lichess ratings).
 BUCKET_START, BUCKET_END, BUCKET_STEP = 1100, 2000, 100
+# Maia-2 was trained without each game's first 10 plies (its first_n_moves setting), so its
+# opening predictions are rough: the move model gives them their own, smaller weight.
+FIRST_PLY = 10
 # Chess.com ratings run lower than Lichess ones; this is added before bucketing.
 # Fitted on real games with scripts/evaluate_maia.py (it matters little below 1100,
 # where Maia-2 puts everyone in one bucket).

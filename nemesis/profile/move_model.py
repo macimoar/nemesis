@@ -30,10 +30,12 @@ DEFAULT_PRIOR = {
     "time_pressure_x_loss": 0.5, "endgame_x_loss": 0.2, "hangs_piece": -0.3,
 }
 
-# With Maia-2: start from "plays like a human at your rating", plus what Maia-2 can't
-# know (your repertoire, how you handle time trouble). Its predictions already account
-# for move quality, so the generic quality weights would only count it twice.
-MAIA_PRIOR = {"maia": 1.0, "book_freq": 1.2, "book_deviation": -0.3, "time_pressure_x_loss": 0.5}
+# With Maia-2: start from "plays like a human at your rating". Its predictions already
+# account for move quality, so the generic weights are halved rather than counted twice;
+# its opening predictions (positions it never trained on) get half its weight. Chosen on
+# real games (scripts/evaluate_maia.py): the best fit on the training games, confirmed on
+# held-out ones.
+MAIA_PRIOR = {**{k: v / 2 for k, v in DEFAULT_PRIOR.items()}, "maia": 1.0, "maia_early": 0.5}
 
 POPULATION = "__population__"
 
@@ -44,7 +46,7 @@ def prior_vector(prior: dict[str, float] | None = None) -> np.ndarray:
 
 
 def uses_maia(samples: list["Sample"]) -> bool:
-    return any(s.X[:, INDEX["maia"]].any() for s in samples[:50])
+    return any(s.X[:, [INDEX["maia"], INDEX["maia_early"]]].any() for s in samples[:50])
 
 
 @dataclass
@@ -80,7 +82,7 @@ class LeaveOneOut:
 # ---------------------------------------------------------------------------
 
 SAMPLES_VERSION = 2  # bump when features change, so cached samples are recomputed
-MAIA_VERSION = 1     # samples built with Maia-2's predictions are cached under their own key
+MAIA_VERSION = 3     # samples built with Maia-2's predictions are cached under their own key
 _BOOK_FREQ, _BOOK_DEV = INDEX["book_freq"], INDEX["book_deviation"]
 
 
@@ -331,7 +333,8 @@ def train_player(store: Store, player: str, samples: list[Sample], l2: float = 4
         prior = MoveModel.from_dict(pop[0]).w if pop else prior_vector()
 
     train, test = split_by_game(samples)
-    metrics: dict = {"samples": len(samples), "games": len({s.game_id for s in samples})}
+    metrics: dict = {"samples": len(samples), "games": len({s.game_id for s in samples}),
+                     "maia": uses_maia(samples)}
     if test and train:
         held = MoveModel().fit(train, prior=prior, l2=l2)
         metrics["holdout"] = evaluate(held, test)

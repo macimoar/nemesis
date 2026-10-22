@@ -40,9 +40,10 @@ Everything stays on your computer, in a `.nemesis` folder in your home folder. S
    - **style:** capture, trade, check, sacrifice, pawn storm, king attack, retreat, castling
    - **tactical blind spots:** hangs a piece, ignores a threat, walks into a fork, pin, skewer, discovered attack or back-rank mate
    - **your opening repertoire**
+   - **how likely a human at your rating is to play it,** from [Maia-2](https://github.com/CSSLab/maia2)
    - **context:** time pressure, endgame, ahead or behind
 
-   Your weights are pulled toward a population prior, so a few games already give sensible predictions.
+   Your weights start from "a typical human at your rating" and adjust as your games come in, so predictions are good from your first game.
 
 2. **Exploit search.** Nemesis's turns are max nodes. Your turns are *chance* nodes: it averages over the moves the model predicts you'll play, instead of assuming your best reply. Likely moves that Stockfish didn't rank get analysed explicitly, because that's where blunders hide. Leaves are Stockfish evals converted to expected score.
 
@@ -169,6 +170,32 @@ Pick **Opponent → Doppelgänger of …** to play against a copy of anyone Neme
 - **X-Ray** shows how likely they were to play each option; **Poker Face** keeps quiet.
 - Practice games aren't rated, but Nemesis still learns from your moves in them.
 
+## The human-move model (Maia-2)
+
+[Maia-2](https://github.com/CSSLab/maia2) is a neural network from the University of Toronto, trained on millions of Lichess games to predict the move a human at a given rating will actually play (not the best move). Nemesis uses it as the starting point of your move model; your personal weights then learn what's different about you.
+
+- **It downloads once** (about 43 MB per time control, rapid and blitz) the first time Nemesis starts, into `~/.nemesis/maia2/`, from this project's GitHub releases. Until it arrives, or if it can't, Nemesis works exactly as before.
+- **It runs locally** with onnxruntime: nothing about your games leaves your computer.
+- **Ratings:** Maia-2 thinks in Lichess ratings; Chess.com ratings are shifted onto that scale.
+- **Openings:** Maia-2 wasn't trained on the first 10 half-moves of games, so there its predictions get a smaller, separate weight, and your own repertoire does most of the work.
+
+**Does it help?** Measured on one real player's 74 Chess.com games (rated about 850 to 1150), training on the older games and predicting the 568 moves of the newest 19 games, which were never trained on:
+
+| Predicting the exact move | top-1 | top-3 | log loss (lower is better) |
+|---|---|---|---|
+| Stockfish's best move | 39.6% | | |
+| Before: generic starting model | 42.6% | 69.2% | 2.28 |
+| Before: personal model | 46.1% | 73.1% | 1.83 |
+| Maia-2 alone, at your rating | 48.6% | 75.2% | 1.65 |
+| After: starting model with Maia-2 (no games yet) | 55.6% | 82.2% | 1.60 |
+| After: personal model with Maia-2 | 55.6% | 82.4% | 1.41 |
+
+Personalising on top of Maia-2 doesn't change the single top guess much here, but it makes the probabilities sharper (log loss 1.60 → 1.41), and the exploit search works with those probabilities, not just the top guess.
+
+That's one player, so treat it as a strong first sign, not a guarantee (about ±2% from sample size alone). To measure it on your own games: `python scripts/evaluate_maia.py --player you your-games.pgn`.
+
+Maia-2 is MIT-licensed (Copyright (c) 2024 CSSLab); the licence is downloaded alongside the model. `scripts/convert_maia2.py` and the "Maia-2 models" workflow convert the official models to ONNX and check the copies against the originals.
+
 ## Does exploitation pay?
 
 `scripts/simulate.py` generates games for synthetic players with known styles. `scripts/benchmark.py` then plays Nemesis (risk 100, full strength) and plain Stockfish at the same depth against the same player, using the same seeds. Results after training on 30 games of each:
@@ -196,6 +223,7 @@ nemesis/
   puzzles.py    puzzles mined from your mistakes
   repairs.py    opening repair: your costly opening habits, drilled with spacing
   doppelganger.py  play like any imported player
+  maia.py       Maia-2 human-move model: ONNX inference, download on first use
   engine.py     Nemesis = model + opening tree + search
   launcher.py   double-click entry: free port, reuse a running copy, open the browser
   learn.py      training pipeline; recording games played against Nemesis

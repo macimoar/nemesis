@@ -29,8 +29,9 @@ FEATURES = [
     "allows_pin", "allows_skewer", "allows_discovered", "allows_back_rank",
     # repertoire
     "book_freq", "book_deviation",
-    # how likely a human at this rating is to play the move (Maia-2's log-probability)
-    "maia",
+    # how likely a human at this rating is to play the move (Maia-2's log-probability);
+    # Maia-2 never trained on the first 10 plies, so those get their own weight
+    "maia", "maia_early",
     # context interactions
     "time_pressure_x_loss", "time_pressure_x_best", "endgame_x_loss", "losing_x_loss",
     "losing_x_sacrifice", "winning_x_trade",
@@ -286,6 +287,7 @@ def position_features(
     key = position_key(board) if repertoire else None
     book_total = repertoire.total(key) if repertoire else 0
     forward = 1 if me == chess.WHITE else -1
+    early = board.ply() < 10      # Maia-2's first_n_moves: positions it never trained on
 
     for i, move in enumerate(moves):
         f = X[i]
@@ -344,7 +346,7 @@ def position_features(
             board.pop()
 
         if ctx.maia:
-            f[INDEX["maia"]] = max(math.log(max(ctx.maia.get(uci, 0.0), 1e-9)), -9.0)
+            f[INDEX["maia_early" if early else "maia"]] = max(math.log(max(ctx.maia.get(uci, 0.0), 1e-9)), -9.0)
 
         if repertoire and book_total:
             freq = repertoire.freq(key, uci)

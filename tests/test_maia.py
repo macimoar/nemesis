@@ -49,14 +49,23 @@ def test_encoding_is_from_the_side_to_move():
 
 
 def test_feature_is_the_log_probability():
-    board = chess.Board()
-    losses = {m.uci(): 0 for m in board.legal_moves}
-    moves, X = position_features(board, losses, ctx=Context(maia=FakeMaia().policy(board, 1500, 1500)))
+    middlegame = chess.Board("r1bqkb1r/pppp1ppp/2n2n2/4p3/2B1P3/5N2/PPPP1PPP/RNBQK2R w KQkq - 4 6")
+    losses = {m.uci(): 0 for m in middlegame.legal_moves}
+    fake = FakeMaia(favourite="f3g5")
+    moves, X = position_features(middlegame, losses, ctx=Context(maia=fake.policy(middlegame, 1500, 1500)))
     ucis = [m.uci() for m in moves]
-    assert X[ucis.index("e2e4"), INDEX["maia"]] == pytest.approx(np.log(0.8))
-    assert X[ucis.index("a2a3"), INDEX["maia"]] == pytest.approx(np.log(0.2 / 19))
-    _, X0 = position_features(board, losses)
-    assert not X0[:, INDEX["maia"]].any()            # without Maia-2 the feature is simply off
+    n = len(ucis)
+    assert X[ucis.index("f3g5"), INDEX["maia"]] == pytest.approx(np.log(0.8))
+    assert X[ucis.index("a2a3"), INDEX["maia"]] == pytest.approx(np.log(0.2 / (n - 1)))
+    assert not X[:, INDEX["maia_early"]].any()
+    # In the first 10 plies, which Maia-2 never trained on, it's a separate feature.
+    start = chess.Board()
+    moves, X = position_features(start, {m.uci(): 0 for m in start.legal_moves},
+                                 ctx=Context(maia=FakeMaia().policy(start, 1500, 1500)))
+    assert X[[m.uci() for m in moves].index("e2e4"), INDEX["maia_early"]] == pytest.approx(np.log(0.8))
+    assert not X[:, INDEX["maia"]].any()
+    _, X0 = position_features(middlegame, losses)
+    assert not X0[:, [INDEX["maia"], INDEX["maia_early"]]].any()   # without Maia-2 the features are off
 
 
 def test_training_with_maia(store, analyzer):
@@ -65,7 +74,9 @@ def test_training_with_maia(store, analyzer):
     samples = build_samples(store, "me", analyzer, maia_for=lambda kind: fake)
     assert fake.calls and all(n == 2 for n, *_ in fake.calls)      # one batch per game
     first = samples[0]
-    assert first.X[first.moves.index("e2e4"), INDEX["maia"]] == pytest.approx(np.log(0.8))
+    # Opening positions (Maia-2 never trained on the first 10 plies) use their own feature.
+    assert first.X[first.moves.index("e2e4"), INDEX["maia_early"]] == pytest.approx(np.log(0.8))
+    assert not first.X[:, INDEX["maia"]].any()
     # Cached separately from samples built without Maia-2.
     plain = build_samples(store, "me", analyzer)
     assert not plain[0].X[:, INDEX["maia"]].any()
@@ -100,9 +111,9 @@ def test_rating_offset_follows_where_games_come_from(store):
 @pytest.mark.skipif(maia.installed("rapid") is None, reason="Maia-2 models not downloaded")
 def test_real_model_predicts_sensible_moves():
     m = maia.installed("rapid")
-    probs = m.policy(chess.Board(), 1500, 1500)
-    assert abs(sum(probs.values()) - 1) < 1e-4 and max(probs, key=probs.get) in ("e2e4", "d2d4")
-    board = chess.Board()
-    board.push_uci("e2e4")
-    reply = m.policy(board, 1500, 1500)
-    assert max(reply, key=reply.get) in ("e7e5", "c7c5", "e7e6")
+    # Black's pawn just took on d5: a human recaptures.
+    probs = m.policy(chess.Board("rnbqkbnr/ppp2ppp/8/3pp3/4P3/5N2/PPPP1PPP/RNBQKB1R w KQkq - 0 13"), 1500, 1500)
+    assert abs(sum(probs.values()) - 1) < 1e-4 and max(probs, key=probs.get) == "e4d5"
+    # The queen came out to h4: a human chases it.
+    probs = m.policy(chess.Board("rnb1kbnr/pppp1ppp/8/4p3/4P2q/2N5/PPPP1PPP/R1BQKBNR w KQkq - 2 13"), 1500, 1500)
+    assert max(probs, key=probs.get) == "g1f3"

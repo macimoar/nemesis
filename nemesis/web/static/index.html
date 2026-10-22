@@ -695,7 +695,7 @@ async function loadProfile(player) {
     <h2>${escapeHtml(p.player)}</h2>
     <p class="muted">${p.games} games · ${p.moves_analysed} moves analysed · overall score ${pct(p.score)}</p>
     ${h ? `<p>On your newest games, Nemesis predicts your exact move <b>${pct(h.top1)}</b> of the time (top 3: ${pct(h.top3)}).
-      A generic player model gets ${pct(pr.top1)}; "you'll play Stockfish's move" gets ${pct(h.stockfish_top1)}.</p>` : ""}
+      ${p.metrics.maia ? `A typical human at your rating (Maia-2) gets ${pct(pr.top1)}` : `A generic player model gets ${pct(pr.top1)}`}; "you'll play Stockfish's move" gets ${pct(h.stockfish_top1)}.</p>` : ""}
     <div id="insights"></div>
     <div class="grid2">
       <div><h3>What sets you apart</h3>${traits}</div>
