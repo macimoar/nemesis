@@ -710,6 +710,11 @@ async function loadProfile(player) {
         ${stat("Leaves a piece hanging", pct(p.blind_spots.hangs_piece))}
         ${stat("Ignores a threat", pct(p.blind_spots.ignores_threat))}
         ${stat("Walks into a fork", pct(p.blind_spots.allows_fork))}
+        ${p.blind_spots.allows_pin != null ? `
+        ${stat("Walks into a pin", pct(p.blind_spots.allows_pin))}
+        ${stat("Gets skewered", pct(p.blind_spots.allows_skewer))}
+        ${stat("Misses a discovered attack", pct(p.blind_spots.allows_discovered))}
+        ${stat("Allows a back-rank mate", pct(p.blind_spots.allows_back_rank))}` : ""}
         <h3>By phase</h3>${phases}
         ${p.clock.moves_in_time_pressure ? `<h3>Under 30 seconds</h3>${stat("Blunder rate", pct(p.clock.blunder_rate_time_pressure) + " vs " + pct(p.clock.blunder_rate_normal))}` : ""}
       </div>
@@ -953,7 +958,8 @@ document.addEventListener("keydown", (e) => {
 // ---------------------------------------------------------------------------
 // Puzzles from your own mistakes
 // ---------------------------------------------------------------------------
-const THEME_NAMES = { mate: "Checkmate", fork: "Forks", material: "Winning material", defend: "Saving a piece",
+const THEME_NAMES = { back_rank: "Back-rank mates", pin: "Pins", skewer: "Skewers", discovered: "Discovered attacks",
+                      mate: "Checkmate", fork: "Forks", material: "Winning material", defend: "Saving a piece",
                       threat: "Spotting threats", best: "Keeping the advantage" };
 let pzHints = 0, pzTimer = null;
 

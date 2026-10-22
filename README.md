@@ -38,7 +38,7 @@ Everything stays on your computer, in a `.nemesis` folder in your home folder. S
 1. **Opponent model.** A per-player conditional-logit model predicts P(move | position, you). Each legal move is described by about 30 features:
    - **objective quality:** centipawn loss vs Stockfish, top-3 or not, blunder
    - **style:** capture, trade, check, sacrifice, pawn storm, king attack, retreat, castling
-   - **tactical blind spots:** hangs a piece, ignores a threat, walks into a fork
+   - **tactical blind spots:** hangs a piece, ignores a threat, walks into a fork, pin, skewer, discovered attack or back-rank mate
    - **your opening repertoire**
    - **context:** time pressure, endgame, ahead or behind
 
@@ -148,7 +148,7 @@ Open the **Puzzles** tab to drill the positions where you went wrong in your own
 - **Where they come from:** every position where your move cost at least 1.5 pawns and one move was clearly best (at least a pawn better than anything else). Nemesis finds them each time it studies your games. If you imported games before puzzles existed, press **Retrain** once.
 - **Hardest first:** your move model estimates how likely *you* are to find each move, and the ones you'd most likely miss come first. Puzzles you miss come back after the new ones.
 - **Three tries** per puzzle. A wrong move is shown, then taken back, with how many tries are left; the solution stays hidden until you solve it, run out of tries or press **Show solution**.
-- **Two hints:** the first names the theme (a fork, a threat, a piece in danger, checkmate…) without giving the move; the second tells you what you played in the real game and why it was wrong.
+- **Two hints:** the first names the theme (a fork, a pin, a skewer, a discovered attack, a back-rank mate, a threat…) without giving the move; the second tells you what you played in the real game and why it was wrong.
 - **After you answer**, Nemesis shows the solution and what follows on the board, and reminds you what you played in the real game and what it cost.
 
 ## Opening repair

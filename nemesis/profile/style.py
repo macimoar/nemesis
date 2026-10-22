@@ -60,6 +60,10 @@ def style_profile(store: Store, player: str, model: MoveModel, samples: list[Sam
         "hangs_piece": _rate(samples, lambda s: _chosen(s, "hangs_piece")),
         "ignores_threat": _rate(samples, lambda s: _chosen(s, "ignores_threat")),
         "allows_fork": _rate(samples, lambda s: _chosen(s, "allows_fork")),
+        "allows_pin": _rate(samples, lambda s: _chosen(s, "allows_pin")),
+        "allows_skewer": _rate(samples, lambda s: _chosen(s, "allows_skewer")),
+        "allows_discovered": _rate(samples, lambda s: _chosen(s, "allows_discovered")),
+        "allows_back_rank": _rate(samples, lambda s: _chosen(s, "allows_back_rank")),
     }
     clock = {
         "blunder_rate_time_pressure": _rate(tp, lambda s: s.loss >= 300),

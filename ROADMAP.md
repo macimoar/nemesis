@@ -41,7 +41,7 @@ Nemesis knows your weaknesses, so it can drill them.
 
 ## v0.4 — A sharper model
 
-- **More tactical patterns:** pins, skewers, back-rank weaknesses and discovered
+- ✅ **More tactical patterns:** pins, skewers, back-rank weaknesses and discovered
   attacks, alongside forks and hanging pieces, for finer-grained blind spots.
 - **A stronger human-move base:** start from a Maia network (trained on millions of
   human games per rating level) instead of the generic prior, so predictions are

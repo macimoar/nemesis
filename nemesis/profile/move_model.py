@@ -69,7 +69,7 @@ class LeaveOneOut:
 # Dataset construction
 # ---------------------------------------------------------------------------
 
-SAMPLES_VERSION = 1  # bump when features change, so cached samples are recomputed
+SAMPLES_VERSION = 2  # bump when features change, so cached samples are recomputed
 _BOOK_FREQ, _BOOK_DEV = INDEX["book_freq"], INDEX["book_deviation"]
 
 

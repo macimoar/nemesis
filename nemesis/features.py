@@ -3,7 +3,8 @@
 The opponent model learns, per player, how much each feature attracts or repels
 them. Some features describe objective quality (centipawn loss), some describe style
 (captures, king attacks, retreats), and some describe tactical blind spots: does
-the move hang a piece, ignore a threat, or walk into a fork?
+the move hang a piece, ignore a threat, or walk into a fork, pin, skewer, discovered
+attack or back-rank mate?
 """
 
 from __future__ import annotations
@@ -25,6 +26,7 @@ FEATURES = [
     "near_king", "retreat", "advance", "castle", "king_move", "develop", "queen_move",
     # tactical blind spots
     "hangs_piece", "ignores_threat", "allows_fork",
+    "allows_pin", "allows_skewer", "allows_discovered", "allows_back_rank",
     # repertoire
     "book_freq", "book_deviation",
     # context interactions
@@ -52,6 +54,10 @@ STYLE_TEXT = {  # phrased to follow "you ..."
     "hangs_piece": "leave pieces hanging",
     "ignores_threat": "miss the opponent's threats",
     "allows_fork": "walk into forks",
+    "allows_pin": "walk into pins",
+    "allows_skewer": "get skewered",
+    "allows_discovered": "miss discovered attacks",
+    "allows_back_rank": "leave your back rank weak",
     "book_freq": "stick to your repertoire",
     "book_deviation": "leave the repertoire in unfamiliar lines",
     "time_pressure_x_loss": "crack in time trouble",
@@ -125,6 +131,120 @@ def allows_fork(after: chess.Board, victim: chess.Color) -> bool:
         finally:
             after.pop()
     return False
+
+
+# ---------------------------------------------------------------------------
+# Tactics: what the move just played sets up against the side now to move
+# ---------------------------------------------------------------------------
+TACTICS = ("fork", "pin", "skewer", "discovered", "back_rank")
+SLIDERS = {chess.BISHOP: ((1, 1), (1, -1), (-1, 1), (-1, -1)),
+           chess.ROOK: ((1, 0), (-1, 0), (0, 1), (0, -1))}
+SLIDERS[chess.QUEEN] = SLIDERS[chess.BISHOP] + SLIDERS[chess.ROOK]
+
+
+def _survives(board: chess.Board, sq: chess.Square, attacker: chess.Color) -> bool:
+    """Can the piece on `sq` stay there: nobody can take it, or only at a cost (the king
+    into protection, or a piece at least as valuable into a recapture)?"""
+    cheapest = _attackers_min(board, not attacker, sq)
+    if cheapest is None:
+        return True
+    protected = board.is_attacked_by(attacker, sq)
+    if cheapest == VALUE[chess.KING]:
+        return protected
+    return protected and cheapest >= VALUE[board.piece_type_at(sq)]
+
+
+def _wins(board: chess.Board, target: chess.Square, by_value: int) -> bool:
+    """Is the piece on `target` worth taking: more valuable than the attacker, or undefended?"""
+    piece = board.piece_type_at(target)
+    if piece == chess.KING:
+        return True
+    return VALUE[piece] > by_value or (VALUE[piece] >= 3 and not board.is_attacked_by(board.color_at(target), target))
+
+
+def _behind(board: chess.Board, sq: chess.Square, target: chess.Square) -> chess.Square | None:
+    """The first occupied square beyond `target` on the line from `sq` through it."""
+    df = chess.square_file(target) - chess.square_file(sq)
+    dr = chess.square_rank(target) - chess.square_rank(sq)
+    step = ((df > 0) - (df < 0), (dr > 0) - (dr < 0))
+    f, r = chess.square_file(target), chess.square_rank(target)
+    while True:
+        f, r = f + step[0], r + step[1]
+        if not (0 <= f < 8 and 0 <= r < 8):
+            return None
+        s2 = chess.square(f, r)
+        if board.piece_at(s2):
+            return s2
+
+
+def created_tactics(board: chess.Board, move: chess.Move) -> set[str]:
+    """Tactics the move just played (`board` is the position after it) sets up against the
+    side to move. Only ones that win something count: a pin of a pawn isn't a tactic."""
+    attacker, victim = not board.turn, board.turn
+    sq = move.to_square
+    piece = board.piece_type_at(sq)
+    if piece is None:
+        return set()
+    found = set()
+    home = 0 if victim == chess.WHITE else 7
+    if piece in (chess.ROOK, chess.QUEEN) and chess.square_rank(sq) == home and board.is_check():
+        king = board.king(victim)
+        if king is not None and chess.square_rank(king) == home and board.is_checkmate():
+            found.add("back_rank")
+            return found
+    mine = chess.SquareSet(board.occupied_co[victim])
+    hit = board.attacks(sq) & mine
+    safe = None
+    # Fork: one piece, two worthwhile targets.
+    if piece != chess.KING and len(hit) >= 2:
+        safe = _survives(board, sq, attacker)
+        if safe and sum(_wins(board, t, VALUE[piece]) for t in hit) >= 2:
+            found.add("fork")
+    # Pin and skewer: two of your pieces on one line, the moved piece looking at the first.
+    if piece in SLIDERS and hit:
+        for front_sq in hit:
+            back_sq = _behind(board, sq, front_sq)
+            if back_sq is None or board.color_at(back_sq) != victim:
+                continue
+            front, back = board.piece_type_at(front_sq), board.piece_type_at(back_sq)
+            pin = front != chess.KING and VALUE[front] >= 3 and VALUE[back] > VALUE[front] \
+                and _wins(board, front_sq, VALUE[piece])
+            skewer = not pin and VALUE[front] > VALUE[back] >= 3 and _wins(board, back_sq, VALUE[piece])
+            if pin or skewer:
+                safe = _survives(board, sq, attacker) if safe is None else safe
+                if safe:
+                    found.add("pin" if pin else "skewer")
+    # Discovered attack: moving away uncovers another piece's attack, and the moved piece
+    # threatens something too, so you can't answer both.
+    revealed = []
+    frm, own_bb = move.from_square, board.occupied_co[attacker] & ~chess.BB_SQUARES[sq]
+    # Only pieces that share a line with the square just vacated can have been uncovered.
+    lined = ((board.rooks | board.queens) & own_bb & (chess.BB_RANK_MASKS[frm] | chess.BB_FILE_MASKS[frm])) \
+        | ((board.bishops | board.queens) & own_bb & chess.BB_DIAG_MASKS[frm])
+    for slider in chess.scan_forward(lined):
+        s_value = VALUE[board.piece_type_at(slider)]
+        for t in board.attacks(slider) & mine:
+            if chess.BB_SQUARES[frm] & chess.between(slider, t) and _wins(board, t, s_value):
+                revealed.append(t)
+    if revealed:
+        own = [t for t in hit if t not in revealed and _wins(board, t, VALUE[piece])]
+        if own or board.is_check() and board.king(victim) not in revealed:
+            found.add("discovered")
+    return found
+
+
+def opponent_tactics(after: chess.Board, victim: chess.Color) -> set[str]:
+    """Every tactic the side to move in `after` could play against `victim` right now."""
+    found: set[str] = set()
+    for reply in list(after.legal_moves):
+        after.push(reply)
+        try:
+            found |= created_tactics(after, reply)
+        finally:
+            after.pop()
+        if len(found) == len(TACTICS):
+            break
+    return found
 
 
 def _phase(board: chess.Board) -> str:
@@ -212,9 +332,11 @@ def position_features(
             still = hanging_squares(board, me) - {move.to_square}
             f[INDEX["hangs_piece"]] = bool(still - threatened)
             f[INDEX["ignores_threat"]] = bool(threatened & still) and not captured
-            if check_forks and not board.is_check() and loss >= 100:
+            if check_forks and loss >= 100:
                 # Only worth the cost for moves Stockfish already dislikes.
-                f[INDEX["allows_fork"]] = allows_fork(board, me)
+                tactics = opponent_tactics(board, me)
+                for t in TACTICS:
+                    f[INDEX["allows_" + t]] = t in tactics
         finally:
             board.pop()
 

@@ -12,7 +12,7 @@ import chess
 
 from nemesis.analysis.stockfish import MATE_CP, Analyzer
 from nemesis.commentary import PIECE, describe_move
-from nemesis.features import VALUE, allows_fork, en_prise, hanging_squares
+from nemesis.features import VALUE, created_tactics, en_prise, hanging_squares, opponent_tactics
 from nemesis.profile.move_model import MoveModel, Sample
 from nemesis.store import Store
 
@@ -22,10 +22,15 @@ ALSO_GOOD = 50       # moves within this of the best are also accepted
 LOST = -300          # skip positions that were already lost whatever you played
 LINE_PLIES = 5
 MAX_TRIES = 3        # wrong moves allowed before the solution is shown
+THEMES_VERSION = 2   # bump when themes or explanations change: existing puzzles are re-described
 
-THEMES = {
+THEMES = {  # the first hint: the idea, not the move
+    "back_rank": "Their king is stuck on its back rank.",
     "mate": "There's a checkmate.",
     "fork": "One piece can attack two things at once.",
+    "pin": "One of their pieces is stuck in front of a more valuable one.",
+    "skewer": "Two of their pieces stand on one line.",
+    "discovered": "Moving one piece can uncover an attack by another.",
     "material": "You can win material.",
     "defend": "One of your pieces is in danger.",
     "threat": "Your opponent is threatening something.",
@@ -33,35 +38,16 @@ THEMES = {
 }
 
 
-def _forks(board: chess.Board, move: chess.Move) -> bool:
-    """Does `move` attack two valuable enemy pieces (or the king and a piece) at once?"""
-    piece = board.piece_type_at(move.from_square)
-    me = board.turn
-    board.push(move)
-    try:
-        sq = move.to_square
-        if board.is_attacked_by(not me, sq) and not board.is_attacked_by(me, sq) and piece != chess.PAWN:
-            return False
-        targets = 0
-        for t in board.attacks(sq) & chess.SquareSet(board.occupied_co[not me]):
-            tv = VALUE[board.piece_type_at(t)]
-            if tv > VALUE[piece] or (tv >= 3 and not board.is_attacked_by(not me, t)):
-                targets += 1
-        return targets >= 2
-    finally:
-        board.pop()
-
-
 def themes_for(board: chess.Board, solution: chess.Move, best_cp: int) -> list[str]:
     me = board.turn
-    themes = []
     board.push(solution)
     mate_now = board.is_checkmate()
+    tactics = created_tactics(board, solution)
     board.pop()
-    if mate_now or best_cp >= MATE_CP:
+    themes = ["back_rank"] if "back_rank" in tactics else []
+    if (mate_now or best_cp >= MATE_CP) and not themes:
         themes.append("mate")
-    if _forks(board, solution):
-        themes.append("fork")
+    themes += [t for t in ("fork", "pin", "skewer", "discovered") if t in tactics]
     if board.is_capture(solution) and not board.is_en_passant(solution) and en_prise(board, solution.to_square):
         themes.append("material")
     in_danger = hanging_squares(board, me)
@@ -75,10 +61,15 @@ def themes_for(board: chess.Board, solution: chess.Move, best_cp: int) -> list[s
         # Would doing nothing have let the opponent win something?
         null = board.copy(stack=False)
         null.push(chess.Move.null())
-        if not null.is_check() and (allows_fork(null, me) or hanging_squares(null, me) or
+        if not null.is_check() and (opponent_tactics(null, me) or hanging_squares(null, me) or
                                     any(null.gives_check(m) for m in null.legal_moves if null.is_capture(m))):
             themes.append("threat")
     return themes or ["best"]
+
+
+ALLOWED = {"back_rank": "it allowed a back-rank mate", "fork": "it allowed a fork",
+           "pin": "it allowed a pin", "skewer": "it allowed a skewer",
+           "discovered": "it allowed a discovered attack"}
 
 
 def what_went_wrong(board: chess.Board, played: chess.Move) -> str | None:
@@ -98,8 +89,10 @@ def what_went_wrong(board: chess.Board, played: chess.Move) -> str | None:
         if sq != played.to_square and sq in hanging_squares(board, me):
             return f"it didn't deal with the attack on {piece}"
         return f"it left {piece} open to capture"
-    if allows_fork(after, me):
-        return "it allowed a fork"
+    tactics = opponent_tactics(after, me)
+    for t in ("back_rank", "fork", "pin", "skewer", "discovered"):
+        if t in tactics:
+            return ALLOWED[t]
     for reply in after.legal_moves:
         after.push(reply)
         mate = after.is_checkmate()
@@ -153,6 +146,7 @@ def make_puzzle(board: chess.Board, played: str, lines: dict[str, int], analyzer
         "line": line,
         "line_san": _san_line(board, line),
         "chance": chance,
+        "v": THEMES_VERSION,
     }
 
 
@@ -160,6 +154,7 @@ def mine(store: Store, player: str, analyzer: Analyzer, samples: list[Sample],
          model: MoveModel | None = None) -> int:
     """Turn new mistakes into puzzles. Returns how many were added."""
     player = player.lower()
+    redescribe(store, player)
     have = store.puzzle_ids(player)
     fens: dict[str, dict[int, str]] = {}
     added = 0
@@ -192,6 +187,20 @@ def mine(store: Store, player: str, analyzer: Analyzer, samples: list[Sample],
         store.put_puzzle(pid, player, smp.game_id, smp.ply, fen, best_uci, puzzle)
         added += 1
     return added
+
+
+def redescribe(store: Store, player: str) -> None:
+    """Bring puzzles mined by an older version up to date: new themes and explanations."""
+    keep = ("id", "player", "game_id", "ply", "fen", "solution", "attempts")
+    for p in store.puzzles(player):
+        if p.get("v", 1) >= THEMES_VERSION:
+            continue
+        board = chess.Board(p["fen"])
+        data = {k: v for k, v in p.items() if k not in keep}
+        data["themes"] = themes_for(board, chess.Move.from_uci(p["solution"]), p["eval"])
+        data["wrong"] = what_went_wrong(board, chess.Move.from_uci(p["played"]))
+        data["v"] = THEMES_VERSION
+        store.put_puzzle(p["id"], player, p["game_id"], p["ply"], p["fen"], p["solution"], data)
 
 
 def status(p: dict) -> str:

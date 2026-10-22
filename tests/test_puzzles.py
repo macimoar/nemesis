@@ -26,11 +26,12 @@ def test_no_puzzle_when_you_played_the_best_move_or_nothing_stands_out(analyzer)
     assert puzzles.make_puzzle(quiet, "a2a3", analyzer.lines(quiet), analyzer) is None
 
 
-def test_mate_theme(analyzer):
+def test_back_rank_theme(analyzer):
     board = chess.Board("6k1/5ppp/8/8/8/8/8/R5K1 w - - 0 1")
     lines = analyzer.lines(board, multipv=6, extra=["g1f1"])
     p = puzzles.make_puzzle(board, "g1f1", lines, analyzer)
-    assert p["solution_san"] == "Ra8#" and "mate" in p["themes"]
+    assert p["solution_san"] == "Ra8#" and p["themes"][0] == "back_rank"
+    assert p["wrong"] == "it allowed a back-rank mate" or p["wrong"] is None or "back-rank" not in (p["wrong"] or "")
 
 
 def _game_with_missed_queen(store):
@@ -109,3 +110,14 @@ def test_puzzle_api(tmp_path, analyzer):
     assert c.get("/api/puzzles/me").json()["solved"] == 1
     assert c.post("/api/puzzle/nope/attempt", json={"uci": "e2e4"}).status_code == 404
     assert c.get("/api/puzzles/nobody/next").json() == {"puzzle": None}
+
+
+def test_old_puzzles_are_redescribed(store):
+    # A puzzle saved by v0.3 (no "v"): mining brings its themes up to date.
+    fen = "6k1/5ppp/8/8/8/8/8/R5K1 w - - 0 1"
+    store.put_puzzle("g#0", "me", "g", 0, fen, "a1a8",
+                     {"themes": ["mate"], "eval": 2000, "played": "g1f1", "played_san": "Kf1",
+                      "color": "white", "move_number": 1})
+    puzzles.redescribe(store, "me")
+    (p,) = store.puzzles("me")
+    assert p["themes"] == ["back_rank"] and p["v"] == puzzles.THEMES_VERSION

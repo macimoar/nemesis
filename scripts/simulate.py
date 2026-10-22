@@ -6,6 +6,7 @@ Styles:
   grabber  - takes material whenever it can, even when it's poisoned
   coward   - prefers retreats and avoids trades
   solid    - plays one of Stockfish's top 2 moves
+  pinblind - plays well, but often walks into pins and skewers
 """
 
 from __future__ import annotations
@@ -18,7 +19,7 @@ import chess.engine
 import chess.pgn
 
 from nemesis.analysis.stockfish import find_stockfish
-from nemesis.features import VALUE
+from nemesis.features import VALUE, opponent_tactics
 
 
 def pick(style: str, board: chess.Board, top: list[chess.Move], rng: random.Random) -> chess.Move:
@@ -33,12 +34,21 @@ def pick(style: str, board: chess.Board, top: list[chess.Move], rng: random.Rand
                  and board.piece_type_at(m.from_square) != chess.KING]
         if backs and rng.random() < 0.5:
             return rng.choice(backs)
+    elif style == "pinblind" and rng.random() < 0.5:
+        blind = []
+        for m in legal:
+            board.push(m)
+            if opponent_tactics(board, not board.turn) & {"pin", "skewer"}:
+                blind.append(m)
+            board.pop()
+        if blind:
+            return rng.choice(blind)
     return rng.choice(top[:2])
 
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("style", choices=["grabber", "coward", "solid"])
+    ap.add_argument("style", choices=["grabber", "coward", "solid", "pinblind"])
     ap.add_argument("--games", type=int, default=30)
     ap.add_argument("--out", required=True)
     ap.add_argument("--seed", type=int, default=1)
