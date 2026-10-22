@@ -9,7 +9,9 @@ For each of the rapid and blitz models it writes a full-precision .onnx file and
 half-size fp16 one, checks both against the PyTorch original on a few hundred positions,
 and writes the move vocabulary (moves.json), the Maia-2 licence and checksums.
 `--random-init` builds the same network with random weights instead of downloading,
-to test the export itself.
+to test the export itself. `--from-onnx DIR` skips PyTorch: it takes full-precision files
+from an earlier conversion (Google Drive rate-limits the originals) and makes the fp16
+copies, checked against those.
 """
 
 from __future__ import annotations
@@ -104,6 +106,27 @@ def check(onnx_path: Path, policy: Policy, boards: list[chess.Board], moves: lis
             "max_value_diff": float(np.abs(ref_value.numpy() - got_value).max())}
 
 
+def check_onnx(small: Path, full: Path, boards: list[chess.Board], moves: list[str]) -> dict:
+    """The fp16 copy against the full-precision ONNX file (already checked against PyTorch)."""
+    import onnxruntime as ort
+    a = ort.InferenceSession(str(full), providers=["CPUExecutionProvider"])
+    b = ort.InferenceSession(str(small), providers=["CPUExecutionProvider"])
+    x = np.stack([board_to_tensor(bd).numpy() for bd in boards])
+    rng = np.random.default_rng(0)
+    feeds = {"boards": x, "elo_self": rng.integers(0, 11, len(boards)), "elo_oppo": rng.integers(0, 11, len(boards))}
+    (la, va), (lb, vb) = a.run(None, feeds), b.run(None, feeds)
+    index = {m: i for i, m in enumerate(moves)}
+    agree, max_diff = 0, 0.0
+    for k, board in enumerate(boards):
+        legal = [index[m.uci()] for m in board.legal_moves]
+        pa, pb = (np.exp(l[k, legal] - l[k, legal].max()) for l in (la, lb))
+        pa, pb = pa / pa.sum(), pb / pb.sum()
+        agree += int(pa.argmax() == pb.argmax())
+        max_diff = max(max_diff, float(np.abs(pa - pb).max()))
+    return {"positions": len(boards), "top1_agreement": agree / len(boards), "max_prob_diff": max_diff,
+            "max_value_diff": float(np.abs(va - vb).max()), "checked_against": full.name}
+
+
 def sha256(path: Path) -> str:
     h = hashlib.sha256()
     with open(path, "rb") as f:
@@ -118,6 +141,8 @@ def main() -> None:
     ap.add_argument("--types", default="rapid,blitz")
     ap.add_argument("--random-init", metavar="CONFIG_YAML",
                     help="test the export with random weights and this architecture config")
+    ap.add_argument("--from-onnx", type=Path, metavar="DIR",
+                    help="make the fp16 copies from full-precision files of an earlier conversion")
     ap.add_argument("--positions", type=int, default=300)
     args = ap.parse_args()
     out = Path(args.out)
@@ -129,6 +154,21 @@ def main() -> None:
     report = {"elo_buckets": list(create_elo_dict()), "models": {}}
 
     for kind in args.types.split(","):
+        if args.from_onnx:
+            import shutil
+            import onnx
+            from onnxconverter_common import float16
+            path, small = out / f"maia2-{kind}.onnx", out / f"maia2-{kind}-fp16.onnx"
+            if (args.from_onnx / path.name).resolve() != path.resolve():
+                shutil.copy(args.from_onnx / path.name, path)
+            onnx.save(float16.convert_float_to_float16(onnx.load(str(path)), keep_io_types=True), str(small))
+            got = check_onnx(small, path, boards, moves)
+            report["models"][kind] = {small.name: {"bytes": small.stat().st_size, "sha256": sha256(small), **got},
+                                      path.name: {"bytes": path.stat().st_size, "sha256": sha256(path)}}
+            print(kind, json.dumps(report["models"][kind], indent=2))
+            if got["top1_agreement"] < 0.97 or got["max_prob_diff"] > 0.05:
+                raise SystemExit(f"{small.name} doesn't match {path.name}: {got}")
+            continue
         if args.random_init:
             net = MAIA2Model(len(moves), create_elo_dict(), parse_args(args.random_init))
         else:

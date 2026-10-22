@@ -11,6 +11,10 @@ on:
         description: "Release tag for the converted models"
         required: true
         default: "maia2-onnx-v2"
+      from_release:
+        description: "Reuse the full-precision ONNX files of this earlier release instead of downloading the originals (Google Drive rate-limits them). Empty = from the originals."
+        required: false
+        default: "maia2-onnx-v1"
 
 permissions:
   contents: write
@@ -29,7 +33,17 @@ jobs:
           pip install torch --index-url https://download.pytorch.org/whl/cpu
           pip install maia2 onnx onnxruntime onnxconverter-common
       - name: Convert and check
-        run: python scripts/convert_maia2.py --out maia2-onnx
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ -n "${{ inputs.from_release }}" ]; then
+            mkdir -p maia2-onnx
+            gh release download "${{ inputs.from_release }}" --dir maia2-onnx --pattern "maia2-rapid.onnx" --pattern "maia2-blitz.onnx" --pattern "SHA256SUMS"
+            (cd maia2-onnx && grep -E "maia2-(rapid|blitz)\.onnx$" SHA256SUMS | sha256sum -c && rm SHA256SUMS)
+            python scripts/convert_maia2.py --out maia2-onnx --from-onnx maia2-onnx
+          else
+            python scripts/convert_maia2.py --out maia2-onnx
+          fi
       - name: Show the check results
         run: cat maia2-onnx/report.json
       - uses: softprops/action-gh-release@v2
