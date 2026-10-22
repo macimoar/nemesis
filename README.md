@@ -4,7 +4,7 @@ Most chess engines calculate the best move. Nemesis calculates the move that bea
 
 It studies your games and learns your playstyle: your openings, your appetite for material, how you attack, what you miss, how you play when the clock runs down. Then it plays the move most likely to make *you* go wrong. It also talks to you, in one of two commentary modes.
 
-**X-Ray** gives the full breakdown. Nemesis never tells you which move it expects from you, so it doesn't bias your thinking. It reacts after you've moved.
+**X-Ray** gives the full breakdown. Nemesis never tells you which move it expects from you, so it doesn't bias your thinking. It reacts after you've moved. When you make a mistake (a pawn or more), it tells you the better move and, when it's clear, what went wrong. In untimed games (and in timed ones once they're over) you can press **Explore this mistake**: a side board shows how your move gets punished and what follows the better move, step by step, and you can try moves of your own from that position, with Stockfish answering.
 
 > **Nemesis plays d6**
 > - **My move:** d6 (pawn to d6).

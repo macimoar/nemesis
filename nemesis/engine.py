@@ -27,6 +27,9 @@ def search_settings(budget: float | None, deep: bool) -> tuple[int | None, int, 
     return 4, 4, 4, False
 
 
+MISTAKE = 100   # centipawns: from here X-Ray shows the better move and offers to explore
+
+
 class Nemesis:
     def __init__(self, store: Store, player: str, risk: float = 0.5, depth: int = 10,
                  deep: bool = False, analyzer: Analyzer | None = None, stockfish_path: str | None = None,
@@ -40,6 +43,7 @@ class Nemesis:
         self.depth = depth
         self.deep = deep
         self.risk = risk
+        self.drill: dict | None = None   # the last mistake X-Ray can explain (see react)
         self._own_analyzer = analyzer is None
         self.analyzer = analyzer or StockfishAnalyzer(store, path=stockfish_path, depth=depth)
         self.set_player(player)
@@ -99,7 +103,17 @@ class Nemesis:
         lines = self.analyzer.lines(board, extra=[reply.uci()])
         loss = impute_losses(board, lines).get(reply.uci(), 0)
         decision.reply = {"uci": reply.uci(), "loss": loss}   # kept for "does it work on you?"
-        return commentary.react(board, decision, reply, loss, self.mode)
+        said = commentary.react(board, decision, reply, loss, self.mode)
+        self.drill = None
+        if self.mode == commentary.XRAY and loss >= MISTAKE and lines:
+            # X-Ray drills into mistakes: the better move now, the lines on request.
+            from nemesis.puzzles import what_went_wrong
+            best = chess.Move.from_uci(max(lines, key=lines.get))
+            wrong = what_went_wrong(board, reply)
+            said = said + commentary.better_move(board, best, wrong)
+            self.drill = {"fen": board.fen(), "played": reply.uci(), "played_san": board.san(reply),
+                          "best": best.uci(), "best_san": board.san(best), "loss": loss}
+        return said
 
     def close(self) -> None:
         if self._own_analyzer and hasattr(self.analyzer, "close"):

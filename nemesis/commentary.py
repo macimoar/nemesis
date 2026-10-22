@@ -259,6 +259,15 @@ def react(board: chess.Board, decision: "Decision", reply: chess.Move, loss: int
     return lines
 
 
+def better_move(board: chess.Board, best: chess.Move, wrong: str | None) -> list[str]:
+    """X-Ray, after a mistake: what to play instead and, when it's clear, what went wrong.
+    `board` is the position before your move."""
+    out = [_label("Better was", f"{board.san(best)} ({describe_move(board, best)}).")]
+    if wrong:
+        out.append(_label("What went wrong", f"Your move: {wrong}."))
+    return out
+
+
 def _capitalise(text: str) -> str:
     return text[:1].upper() + text[1:]
 

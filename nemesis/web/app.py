@@ -97,6 +97,17 @@ class RepairAttemptReq(BaseModel):
     uci: str
 
 
+class ExploreLinesReq(BaseModel):
+    fen: str
+    played: str
+    best: str
+
+
+class ExploreMoveReq(BaseModel):
+    fen: str
+    uci: str
+
+
 class EloReq(BaseModel):
     elo: int | None = None
 
@@ -459,8 +470,10 @@ def create_app(db: str | Path = DEFAULT_DB, depth: int = 10) -> FastAPI:
             return state(g)
         g.log.append({"who": "you", "san": g.board.san(move)})
         if g.pending is not None:
-            g.log.append({"who": "nemesis", "kind": "reaction",
-                          "lines": g.engine.react(g.board, g.pending, move)})
+            entry = {"who": "nemesis", "kind": "reaction", "lines": g.engine.react(g.board, g.pending, move)}
+            if g.engine.drill:
+                entry["drill"] = g.engine.drill
+            g.log.append(entry)
             if g.annotations and g.pending.reply:
                 g.annotations[-1]["reply"] = g.pending.reply
         g.board.push(move)
@@ -583,6 +596,82 @@ def create_app(db: str | Path = DEFAULT_DB, depth: int = 10) -> FastAPI:
             return repairs.attempt(store, player, req.id, req.uci)
         except KeyError:
             raise HTTPException(404, "No such spot")
+
+    # -- X-Ray: explore a mistake on a side board ---------------------------
+    def _legal(board: chess.Board) -> dict[str, list[str]]:
+        legal: dict[str, list[str]] = {}
+        for m in board.legal_moves:
+            legal.setdefault(chess.square_name(m.from_square), []).append(m.uci())
+        return legal
+
+    def _board(fen: str) -> chess.Board:
+        try:
+            return chess.Board(fen)
+        except ValueError:
+            raise HTTPException(400, "bad position") from None
+
+    def _move(board: chess.Board, uci: str) -> chess.Move:
+        try:
+            move = chess.Move.from_uci(uci)
+        except ValueError:
+            raise HTTPException(400, "bad move") from None
+        if move not in board.legal_moves:
+            raise HTTPException(400, "illegal move")
+        return move
+
+    @app.post("/api/explore/lines")
+    def explore_lines(req: ExploreLinesReq) -> dict:
+        """Your move and how it gets punished, and the better move and what follows."""
+        board = _board(req.fen)
+        played, best = _move(board, req.played), _move(board, req.best)
+        analyzer = get_analyzer()
+        evals = analyzer.lines(board, extra=[req.played, req.best])
+
+        def line(first: chess.Move) -> list[dict]:
+            ucis = analyzer.pv(board, first=first.uci(), plies=8) if hasattr(analyzer, "pv") else []
+            if not ucis or ucis[0] != first.uci():
+                ucis = [first.uci()]
+            b, steps = board.copy(), []
+            for i, u in enumerate(ucis):
+                m = chess.Move.from_uci(u)
+                if m not in b.legal_moves:
+                    break
+                steps.append({"uci": u, "san": b.san(m), "you": i % 2 == 0,
+                              "text": commentary.describe_move(b, m)})
+                b.push(m)
+                steps[-1]["fen"] = b.fen()
+            return steps
+        from nemesis.puzzles import what_went_wrong
+        return {"fen": req.fen, "you": "white" if board.turn == chess.WHITE else "black",
+                "played": {"steps": line(played), "cp": evals.get(req.played)},
+                "best": {"steps": line(best), "cp": evals.get(req.best)},
+                "wrong": what_went_wrong(board, played), "legal": _legal(board)}
+
+    @app.post("/api/explore/move")
+    def explore_move(req: ExploreMoveReq) -> dict:
+        """Try a move on the side board: Stockfish answers, and you see where it leaves you."""
+        board = _board(req.fen)
+        me = board.turn
+        move = _move(board, req.uci)
+        analyzer = get_analyzer()
+        steps = [{"uci": move.uci(), "san": board.san(move), "you": True}]
+        board.push(move)
+        steps[0]["fen"] = board.fen()
+        if not board.is_game_over():
+            lines = analyzer.lines(board, multipv=1)
+            reply = chess.Move.from_uci(max(lines, key=lines.get))
+            steps.append({"uci": reply.uci(), "san": board.san(reply), "you": False})
+            board.push(reply)
+            steps[1]["fen"] = board.fen()
+        if board.is_game_over():
+            result = board.result()
+            cp = 0 if result == "1/2-1/2" else (2000 if (result == "1-0") == (me == chess.WHITE) else -2000)
+        else:
+            cp = max(analyzer.lines(board, multipv=1).values(), default=0)
+            if board.turn != me:
+                cp = -cp
+        return {"steps": steps, "fen": board.fen(), "cp": cp, "legal": _legal(board) if board.turn == me else {},
+                "over": board.is_game_over()}
 
     @app.get("/api/games/list/{player}")
     def list_games(player: str) -> list[dict]:

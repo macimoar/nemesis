@@ -119,6 +119,7 @@
   a.btnlink:hover { border-color: var(--ink); }
   a.small { font-size: 13px; color: var(--muted); margin-right: 8px; }
   button.small { padding: 4px 10px; font-size: 13px; }
+  #explorebar button.on { border-color: var(--accent); color: var(--ink); background: var(--accent-soft); }
   .strip { display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: baseline; margin-top: 12px; font-size: 14px; }
   .strip b { font-variant-numeric: tabular-nums; }
   .strip .delta.up { color: var(--good); } .strip .delta.down { color: var(--accent); }
@@ -260,6 +261,17 @@
       <svg id="graph" class="graph" preserveAspectRatio="none" role="img" aria-label="Evaluation graph"></svg>
       <div id="rv-moves" class="moves"></div>
     </div>
+    <div id="explorebar" class="hidden">
+      <div class="row">
+        <button class="ghost" id="ex-played">Your move</button>
+        <button class="ghost" id="ex-best">Better move</button>
+        <button class="ghost" id="ex-prev" aria-label="Previous move">◀</button>
+        <button class="ghost" id="ex-next" aria-label="Next move">▶</button>
+        <button id="ex-exit">Back to the game</button>
+      </div>
+      <div id="ex-now" class="now" aria-live="polite"></div>
+      <p class="muted" style="margin:6px 0 0;font-size:13px">Step through either line with ◀ ▶ (or the arrow keys), or try a move of your own from the starting position: Stockfish answers.</p>
+    </div>
     <div id="puzzlebar" class="hidden">
       <div id="pz-now" class="now" aria-live="polite"></div>
       <div class="row">
@@ -332,7 +344,8 @@ const GLYPH = { k: "♚", q: "♛", r: "♜", b: "♝", n: "♞", p: "♟" };
 const $ = (id) => document.getElementById(id);
 let game = null, selected = null, flipped = false;
 let review = null, rply = -1;   // review mode: the reviewed game and the ply shown (-1 = start)
-let puz = null;   // puzzle mode: {p: the puzzle, result: your answer's outcome, shown: fen on the board, last}
+let puz = null;
+let explore = null;   // exploring a mistake: {data, line: "played" | "best" | "own", i, own: [steps], legal, busy}   // puzzle mode: {p: the puzzle, result: your answer's outcome, shown: fen on the board, last}
 
 async function api(path, body) {
   const opts = body === undefined ? {} : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) };
@@ -378,6 +391,9 @@ function render() {
     lastUci = rply < 0 ? null : review.moves[rply].uci;
   } else if (puz) {
     fen = puz.shown; lastUci = puz.last;
+  } else if (explore) {
+    const step = exploreStep();
+    fen = step ? step.fen : explore.data.fen; lastUci = step ? step.uci : null;
   }
   const pieces = parseFen(fen);
   if (pendingMove && !review) { applyPending(pieces, pendingMove); lastUci = pendingMove; }
@@ -385,7 +401,7 @@ function render() {
   const targets = new Set(selected && !review ? movesFrom(selected).map(u => u.slice(2, 4)) : []);
   const last = lastUci ? [lastUci.slice(0, 2), lastUci.slice(2, 4)] : [];
   const turn = puz ? puz.p.color : game ? game.turn : "white";
-  const inCheck = puz ? puz.p.check && !puz.result : game && game.check;
+  const inCheck = explore ? false : puz ? puz.p.check && !puz.result : game && game.check;
   for (let r = 0; r < 8; r++) for (let f = 0; f < 8; f++) {
     const rank = flipped ? r + 1 : 8 - r, file = flipped ? 7 - f : f;
     const name = "abcdefgh"[file] + rank;
@@ -414,8 +430,8 @@ function render() {
 // Moving: click a piece then a square, or drag it. Promotions ask which piece.
 // ---------------------------------------------------------------------------
 const canMove = () => !review && !pendingMove && !promoOpen &&
-  (puz ? !puz.result && !puz.intro : game && !game.finished && game.turn === game.human);
-const movesFrom = (sq) => (puz ? puz.result || puz.intro ? [] : puz.p.legal[sq] : game && game.legal[sq]) || [];
+  (explore ? !explore.busy : puz ? !puz.result && !puz.intro : game && !game.finished && game.turn === game.human);
+const movesFrom = (sq) => (explore ? exploreLegal()[sq] : puz ? puz.result || puz.intro ? [] : puz.p.legal[sq] : game && game.legal[sq]) || [];
 const movesTo = (from, to) => movesFrom(from).filter(u => u.slice(2, 4) === to);
 let drag = null, promoOpen = false;
 
@@ -430,6 +446,7 @@ function tryMove(from, to) {
 
 async function submitMove(uci) {
   sfx(moveSound(uci));
+  if (explore) return exploreMove(uci);
   if (puz) return answerPuzzle(uci);
   pendingMove = uci;
   $("status").textContent = `${oppName()} is thinking…`;
@@ -448,7 +465,7 @@ async function submitMove(uci) {
 
 function showPromotion(from, to) {
   promoOpen = true;
-  const white = (puz ? puz.p.color : game.human) === "white";
+  const white = (explore ? explore.data.you : puz ? puz.p.color : game.human) === "white";
   const sqEl = document.querySelector(`#board [data-sq="${to}"]`);
   const board = $("board"), b = board.getBoundingClientRect(), r = sqEl.getBoundingClientRect();
   const atTop = r.top - b.top < b.height / 2;   // open downward from the top edge, upward from the bottom
@@ -548,7 +565,7 @@ function update() {
     const d = document.createElement("div");
     d.className = "msg " + m.who + (m.kind === "reaction" ? " reaction" : "");
     if (m.who === "you") d.innerHTML = `<b>You</b>${m.san}`;
-    else d.innerHTML = `<b>${m.kind === "move" ? oppName() + " plays " + m.san : m.kind === "info" ? "Nemesis" : oppName()}</b>${speech(m.lines || [])}`;
+    else d.innerHTML = `<b>${m.kind === "move" ? oppName() + " plays " + m.san : m.kind === "info" ? "Nemesis" : oppName()}</b>${speech(m.lines || [])}${drillButton(m)}`;
     log.appendChild(d);
   }
   $("resign").disabled = game.finished;
@@ -576,7 +593,7 @@ function showThinking() {
   let html = "";
   if (ri >= 0) {
     const you = log[ri - 1] && log[ri - 1].who === "you" ? log[ri - 1].san : "";
-    html += `<div class="msg reaction"><b>Your move${you ? ": " + you : ""}</b>${speech(log[ri].lines)}</div>`;
+    html += `<div class="msg reaction"><b>Your move${you ? ": " + you : ""}</b>${speech(log[ri].lines)}${drillButton(log[ri])}</div>`;
   }
   if (mi > ri || (mi >= 0 && ri < 0)) {  // Nemesis has replied since (it hasn't yet if the game just ended)
     html += `<div class="msg nemesis" style="margin-top:8px"><b>${oppName()} plays ${log[mi].san}</b>${speech(log[mi].lines)}</div>`;
@@ -790,6 +807,7 @@ $("newgame").onclick = async () => {
   if (!player) { showTab("import"); $("jobstatus").textContent = "Import a player first."; return; }
   if (review) exitReview();
   if (puz) exitPuzzles(false);
+  if (explore) exitExplore();
   flipped = $("color").value === "black";
   selected = null;
   $("status").textContent = "Starting…";
@@ -871,6 +889,7 @@ async function openReview(id) {
 
 function enterReview(data) {
   if (puz) exitPuzzles(false);
+  if (explore) exitExplore();
   review = data; rply = -1; selected = null;
   flipped = data.game.you === "black";
   $("playbar").classList.add("hidden"); $("reviewbar").classList.remove("hidden");
@@ -1200,6 +1219,106 @@ function opponentChanged() {
 }
 $("opponent").onchange = opponentChanged;
 
+// ---------------------------------------------------------------------------
+// X-Ray: explore a mistake. In untimed games right away; in timed ones once it's over.
+// ---------------------------------------------------------------------------
+function drillButton(entry) {
+  if (!entry.drill || !game || (game.clock && !game.finished)) return "";
+  const i = game.log.indexOf(entry);
+  return `<button class="ghost small explore-btn" data-log="${i}" style="margin-top:6px">Explore this mistake</button>`;
+}
+document.addEventListener("click", (e) => {
+  const b = e.target.closest(".explore-btn");
+  if (b) openExplore(game.log[+b.dataset.log].drill);
+});
+
+const exploreSteps = () => explore.line === "own" ? explore.own : explore.data[explore.line].steps;
+const exploreStep = () => explore && explore.i >= 0 ? exploreSteps()[explore.i] : null;
+function exploreLegal() {
+  // You can try your own moves from the starting position, or carry on your own line.
+  if (explore.i < 0) return explore.data.legal;
+  if (explore.line === "own" && explore.i === explore.own.length - 1) return explore.legal || {};
+  return {};
+}
+
+async function openExplore(drill) {
+  if (review) exitReview();
+  if (puz) exitPuzzles(false);
+  $("ex-now").innerHTML = `<span class="muted">Working out the lines…</span>`;
+  $("playbar").classList.add("hidden"); $("explorebar").classList.remove("hidden");
+  ["clock-top", "clock-bottom"].forEach(id => $(id).classList.add("hidden"));
+  explore = { data: { fen: drill.fen, you: game.human, legal: {}, played: { steps: [] }, best: { steps: [] } },
+              drill, line: "played", i: -1, own: [], busy: true };
+  render();
+  try {
+    explore.data = await api("/api/explore/lines", { fen: drill.fen, played: drill.played, best: drill.best });
+  } catch (e) { $("ex-now").textContent = e.message; return; }
+  explore.busy = false;
+  exploreGo("played", 0);
+}
+
+function exploreGo(line, i) {
+  if (!explore) return;
+  explore.line = line;
+  const steps = exploreSteps();
+  explore.i = Math.max(-1, Math.min(steps.length - 1, i));
+  $("ex-played").classList.toggle("on", line === "played");
+  $("ex-best").classList.toggle("on", line === "best");
+  selected = null; render(); describeExplore();
+}
+
+const evalText = (cp) => cp == null ? "" : Math.abs(cp) >= 1500 ? (cp > 0 ? "a forced win for you" : "a forced loss for you")
+  : Math.abs(cp) < 50 ? "about level" : `${cp > 0 ? "better" : "worse"} for you by about ${(Math.abs(cp) / 100).toFixed(1)} pawns`;
+
+function describeExplore() {
+  const d = explore.data, drill = explore.drill, steps = exploreSteps();
+  let head;
+  if (explore.line === "played") {
+    head = `<b>Your move: ${escapeHtml(drill.played_san)}.</b> After it, Stockfish rates the game ${evalText(d.played.cp)}.`
+      + (d.wrong ? ` The problem: ${escapeHtml(d.wrong)}.` : "") + ` Here's how it gets punished:`;
+  } else if (explore.line === "best") {
+    head = `<b>Better: ${escapeHtml(drill.best_san)}.</b> After it, the game is ${evalText(d.best.cp)}. What follows:`;
+  } else {
+    head = `<b>Your own line.</b>` + (explore.ownCp != null ? ` Now ${evalText(explore.ownCp)}.` : "");
+  }
+  const moves = steps.map((s, k) => `<button class="ghost small ex-step${k === explore.i ? " on" : ""}" data-k="${k}">${s.you ? "You" : "Reply"} ${escapeHtml(s.san)}</button>`).join(" ");
+  const now = exploreStep();
+  const said = now ? `<br><span class="muted">${now.you ? "You" : "Reply"}: ${escapeHtml(now.text || now.san)}</span>` : "";
+  $("ex-now").innerHTML = `${head}<div style="margin-top:6px">${moves || '<span class="muted">Make a move on the board.</span>'}</div>${said}`;
+  document.querySelectorAll("#ex-now .ex-step").forEach(b => b.onclick = () => exploreGo(explore.line, +b.dataset.k));
+}
+
+async function exploreMove(uci) {
+  const from = exploreStep() ? exploreStep().fen : explore.data.fen;
+  if (explore.line !== "own" || explore.i < 0) { explore.own = []; }
+  explore.busy = true;
+  explore.line = "own";
+  try {
+    const res = await api("/api/explore/move", { fen: from, uci });
+    explore.own = explore.own.concat(res.steps);
+    explore.legal = res.legal; explore.ownCp = res.cp;
+  } catch (e) { $("ex-now").textContent = e.message; }
+  explore.busy = false;
+  exploreGo("own", explore.own.length - 1);
+}
+
+function exitExplore() {
+  explore = null; selected = null;
+  $("explorebar").classList.add("hidden"); $("playbar").classList.remove("hidden");
+  if (game) update(); else render();
+}
+
+$("ex-played").onclick = () => exploreGo("played", 0);
+$("ex-best").onclick = () => exploreGo("best", 0);
+$("ex-prev").onclick = () => explore && exploreGo(explore.line, explore.i - 1);
+$("ex-next").onclick = () => explore && exploreGo(explore.line, explore.i + 1);
+$("ex-exit").onclick = exitExplore;
+document.addEventListener("keydown", (e) => {
+  if (!explore || ["INPUT", "SELECT", "TEXTAREA"].includes(document.activeElement.tagName)) return;
+  if (e.key === "ArrowLeft") { exploreGo(explore.line, explore.i - 1); e.preventDefault(); }
+  if (e.key === "ArrowRight") { exploreGo(explore.line, explore.i + 1); e.preventDefault(); }
+});
+
 for (let e = 800; e <= 2400; e += 100) $("strength").insertAdjacentHTML("beforeend", `<option value="${e}">${e}${e === 2400 ? " (full strength)" : ""}</option>`);
 try { const saved = localStorage.getItem("nemesis-strength"); if (saved) $("strength").value = saved; } catch (e) {}
 $("strength").onchange = async () => {
@@ -1309,7 +1428,8 @@ function sfx(kind) {
 
 // Your own move: tell capture/castle from the board before it changes.
 function moveSound(uci) {
-  const pieces = parseFen(puz ? puz.shown : game.fen), from = uci.slice(0, 2), to = uci.slice(2, 4), p = pieces[from] || "";
+  const shownFen = explore ? (exploreStep() ? exploreStep().fen : explore.data.fen) : puz ? puz.shown : game.fen;
+  const pieces = parseFen(shownFen), from = uci.slice(0, 2), to = uci.slice(2, 4), p = pieces[from] || "";
   if (pieces[to] || (p.toLowerCase() === "p" && from[0] !== to[0])) return "capture";
   if (p.toLowerCase() === "k" && Math.abs(from.charCodeAt(0) - to.charCodeAt(0)) === 2) return "castle";
   return "move";
@@ -1361,7 +1481,7 @@ function fmtClock(t) {
 }
 
 function tickClocks() {
-  const show = !!(game && game.clock && !review && !puz);
+  const show = !!(game && game.clock && !review && !puz && !explore);
   for (const id of ["clock-top", "clock-bottom"]) $(id).classList.toggle("hidden", !show);
   if (!show) return;
   const top = flipped ? "white" : "black", bottom = flipped ? "black" : "white";
