@@ -10,7 +10,7 @@ on:
       tag:
         description: "Release tag for the converted models"
         required: true
-        default: "maia2-onnx-v1"
+        default: "maia2-onnx-v2"
 
 permissions:
   contents: write
@@ -27,7 +27,7 @@ jobs:
       - name: Install
         run: |
           pip install torch --index-url https://download.pytorch.org/whl/cpu
-          pip install maia2 onnx onnxruntime
+          pip install maia2 onnx onnxruntime onnxconverter-common
       - name: Convert and check
         run: python scripts/convert_maia2.py --out maia2-onnx
       - name: Show the check results
@@ -40,8 +40,9 @@ jobs:
           prerelease: true
           body: |
             The Maia-2 rapid and blitz models (https://github.com/CSSLab/maia2, MIT licence,
-            Copyright (c) 2024 CSSLab), converted to ONNX for Nemesis. `-int8` files are
-            quantised (about 4x smaller). report.json has the checks against the originals.
+            Copyright (c) 2024 CSSLab), converted to ONNX for Nemesis. `-fp16` files store
+            the weights at half precision (half the size, same answers). report.json has the
+            checks against the originals.
           files: |
             maia2-onnx/*.onnx
             maia2-onnx/moves.json

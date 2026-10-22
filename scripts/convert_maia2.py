@@ -2,11 +2,11 @@
 
 Run where Google Drive is reachable (the "Maia-2 models" GitHub workflow does this):
 
-    pip install maia2 onnx onnxruntime
+    pip install maia2 onnx onnxruntime onnxconverter-common
     python scripts/convert_maia2.py --out maia2-onnx
 
 For each of the rapid and blitz models it writes a full-precision .onnx file and a
-smaller int8 one, checks both against the PyTorch original on a few hundred positions,
+half-size fp16 one, checks both against the PyTorch original on a few hundred positions,
 and writes the move vocabulary (moves.json), the Maia-2 licence and checksums.
 `--random-init` builds the same network with random weights instead of downloading,
 to test the export itself.
@@ -141,9 +141,12 @@ def main() -> None:
                           output_names=["logits", "value"], opset_version=17, dynamo=False,
                           dynamic_axes={"boards": {0: "batch"}, "elo_self": {0: "batch"},
                                         "elo_oppo": {0: "batch"}, "logits": {0: "batch"}, "value": {0: "batch"}})
-        from onnxruntime.quantization import QuantType, quantize_dynamic
-        small = out / f"maia2-{kind}-int8.onnx"
-        quantize_dynamic(str(path), str(small), weight_type=QuantType.QInt8)
+        # Half-precision weights: half the download, same answers (int8 quantisation was
+        # tried and changes the top move in about 1 position in 6).
+        import onnx
+        from onnxconverter_common import float16
+        small = out / f"maia2-{kind}-fp16.onnx"
+        onnx.save(float16.convert_float_to_float16(onnx.load(str(path)), keep_io_types=True), str(small))
         entry = {}
         for p in (path, small):
             entry[p.name] = {"bytes": p.stat().st_size, "sha256": sha256(p), **check(p, policy, boards, moves)}
@@ -152,9 +155,10 @@ def main() -> None:
             entry["source_sha256"] = sha256(source)
         report["models"][kind] = entry
         print(kind, json.dumps(entry, indent=2))
-        full = entry[path.name]
-        if full["top1_agreement"] < 0.99 or full["max_prob_diff"] > 1e-3:
-            raise SystemExit(f"{path.name} doesn't match the PyTorch model: {full}")
+        for name, (min_agree, max_diff) in ((path.name, (0.99, 1e-3)), (small.name, (0.97, 0.05))):
+            got = entry[name]
+            if got["top1_agreement"] < min_agree or got["max_prob_diff"] > max_diff:
+                raise SystemExit(f"{name} doesn't match the PyTorch model: {got}")
 
     (out / "report.json").write_text(json.dumps(report, indent=2))
     sums = [f"{sha256(p)}  {p.name}" for p in sorted(out.glob("*")) if p.is_file() and p.name != "SHA256SUMS"]
