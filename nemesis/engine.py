@@ -47,7 +47,7 @@ class Nemesis:
     def set_player(self, player: str) -> None:
         self.player = player.lower()
         has_maia = maia.get(maia.kind_for(self.tc), allow_download=False) is not None
-        self.model = load_player_model(self.store, self.player, with_maia=has_maia)
+        self.model = load_player_model(self.store, self.player, with_maia=has_maia, tc=self.tc)
         self.tree = OpeningTree.from_store(self.store, self.player)
 
     def reload(self) -> None:

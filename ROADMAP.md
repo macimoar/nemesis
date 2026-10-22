@@ -50,8 +50,10 @@ Nemesis knows your weaknesses, so it can drill them.
   millions of human games, instead of a generic prior, so predictions are good even
   for new players. On one real player's newest games it lifted exact-move prediction
   from 46% to 56%, and from 43% to 56% before seeing any of their games.
-- **A profile per time control:** most people play differently in bullet and rapid
-  (Maia-2 already has separate rapid and blitz models).
+- ✅ **A profile per time control,** used only where it proves itself: each time control
+  with 10+ games gets a profile that must predict its newest games better than your main
+  one. On real games it helped for rapid but not daily games; the profile also shows how
+  your play differs by time control.
 
 ## Later
 

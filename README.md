@@ -194,6 +194,12 @@ Personalising on top of Maia-2 doesn't change the single top guess much here, bu
 
 That's one player, so treat it as a strong first sign, not a guarantee (about ±2% from sample size alone). To measure it on your own games: `python scripts/evaluate_maia.py --player you your-games.pgn`.
 
+### A profile per time control
+
+Most people play differently in bullet than in daily games, but a separate model per time control only helps if it predicts those games better. So for each time control where you have at least 10 games, Nemesis fits a profile that starts from your main one, tests both on that time control's newest games, and uses the time-control profile only if it wins. The Profile tab's **By time control** section shows which profile is used for each, and how your play really differs between them (only differences bigger than chance, by a permutation test over your games).
+
+On the test player above, rapid earned its own profile (log loss 1.39 → 1.37 on its newest games) and daily games didn't; the profile notes that they lose 0.99 pawns a move and blunder 11% of the time in rapid, against 0.61 and 5% in daily games.
+
 Maia-2 is MIT-licensed (Copyright (c) 2024 CSSLab); the licence is downloaded alongside the model. `scripts/convert_maia2.py` and the "Maia-2 models" workflow convert the official models to ONNX and check the copies against the originals.
 
 ## Does exploitation pay?
@@ -224,6 +230,7 @@ nemesis/
   repairs.py    opening repair: your costly opening habits, drilled with spacing
   doppelganger.py  play like any imported player
   maia.py       Maia-2 human-move model: ONNX inference, download on first use
+  profile/timecontrols.py  a profile per time control, used only where it predicts better
   engine.py     Nemesis = model + opening tree + search
   launcher.py   double-click entry: free port, reuse a running copy, open the browser
   learn.py      training pipeline; recording games played against Nemesis

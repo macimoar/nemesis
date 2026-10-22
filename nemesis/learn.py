@@ -14,6 +14,7 @@ from nemesis.analysis.stockfish import Analyzer
 from nemesis.ingest.pgn import to_rows
 from nemesis.profile.move_model import MoveModel, build_samples, train_player, train_population
 from nemesis.profile.repertoire import OpeningTree
+from nemesis.profile import timecontrols
 from nemesis.profile.style import style_profile
 from nemesis.store import Store
 from nemesis.timecontrol import TimeControl
@@ -30,6 +31,7 @@ def train(store: Store, player: str, analyzer: Analyzer, max_games: int | None =
                             maia_for=maia_for)
     model, metrics = train_player(store, player, samples)
     metrics["profile"] = style_profile(store, player, model, samples)
+    metrics["profile"]["by_time_control"] = timecontrols.differences(store, samples)
     store.save_model(player, model.to_dict(), metrics)
     metrics["new_puzzles"] = puzzles.mine(store, player, analyzer, samples, model)
     metrics["repair_spots"] = len(repairs.build(store, player, analyzer, samples))

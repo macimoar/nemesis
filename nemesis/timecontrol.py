@@ -7,6 +7,14 @@ from dataclasses import dataclass
 
 CATEGORIES = ["bullet", "blitz", "rapid", "classical", "untimed"]
 LABELS = {"bullet": "Bullet", "blitz": "Blitz", "rapid": "Rapid", "classical": "Classical", "untimed": "Untimed"}
+# Profiles per time control: classical plays like rapid, and daily (correspondence) games
+# have no clock pressure, like untimed ones.
+PROFILE_GROUPS = ["bullet", "blitz", "rapid", "untimed"]
+PROFILE_LABELS = {"bullet": "Bullet", "blitz": "Blitz", "rapid": "Rapid", "untimed": "Daily & untimed"}
+
+
+def profile_group(category: str | None) -> str:
+    return {"classical": "rapid"}.get(category or "untimed", category or "untimed")
 
 
 @dataclass(frozen=True)

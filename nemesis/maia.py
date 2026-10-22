@@ -89,6 +89,8 @@ class Maia:
 
     def __init__(self, model_path: str | Path, moves_path: str | Path, cache_size: int = 20000):
         import onnxruntime as ort
+        if hasattr(ort, "disable_telemetry_events"):
+            ort.disable_telemetry_events()   # nothing about your games leaves your computer
         opts = ort.SessionOptions()
         opts.intra_op_num_threads = max(1, min(4, (os.cpu_count() or 2) // 2))
         opts.log_severity_level = 3

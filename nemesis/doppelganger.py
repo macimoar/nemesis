@@ -32,7 +32,8 @@ class Doppelganger:
                  seed: int | None = None, tc: str = "untimed", opponent_elo: float | None = None):
         self.store, self.analyzer = store, analyzer
         self.name = name.lower()
-        self.model = load_player_model(store, self.name, with_maia=maia.get("rapid", allow_download=False) is not None)
+        self.model = load_player_model(store, self.name, with_maia=maia.get("rapid", allow_download=False) is not None,
+                                       tc=tc)
         self.tree = OpeningTree.from_store(store, self.name)
         self.rng = random.Random(seed)
         self.mode = commentary.normalise_mode(mode)

@@ -342,6 +342,8 @@ def train_player(store: Store, player: str, samples: list[Sample], l2: float = 4
         store.add_model_history(player, metrics["games"], metrics["holdout"]["top1"],
                                 metrics["holdout"]["top3"], metrics["holdout_prior"]["top1"])
     model = MoveModel().fit(samples, prior=prior, l2=l2)
+    from nemesis.profile import timecontrols
+    metrics["time_controls"] = timecontrols.train_groups(store, player, samples, model, prior, l2)
     store.save_model(player, model.to_dict(), metrics)
     return model, metrics
 
@@ -353,9 +355,16 @@ def train_population(store: Store, samples: list[Sample]) -> MoveModel:
     return model
 
 
-def load_player_model(store: Store, player: str, with_maia: bool = False) -> MoveModel:
-    """The player's trained model. Someone not studied yet gets the starting model: Maia-2's
-    "a human at your rating" when it's available, the generic club player otherwise."""
+def load_player_model(store: Store, player: str, with_maia: bool = False, tc: str | None = None) -> MoveModel:
+    """The player's trained model: their profile for this time control (`tc`, a category)
+    if it earned its place, else their main one. Someone not studied yet gets the starting
+    model: Maia-2's "a human at your rating" when it's available, the generic club player
+    otherwise."""
+    if tc:
+        from nemesis.profile import timecontrols
+        own = timecontrols.load(store, player, tc)
+        if own is not None:
+            return own
     found = store.load_model(player.lower())
     if found:
         return MoveModel.from_dict(found[0])

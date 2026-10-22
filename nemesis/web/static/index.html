@@ -719,11 +719,30 @@ async function loadProfile(player) {
         ${p.clock.moves_in_time_pressure ? `<h3>Under 30 seconds</h3>${stat("Blunder rate", pct(p.clock.blunder_rate_time_pressure) + " vs " + pct(p.clock.blunder_rate_normal))}` : ""}
       </div>
     </div>
+    ${byTimeControl(p)}
     ${openings ? `<h3>Openings</h3><table><tr><th>Opening</th><th class="n">games</th><th class="n">score</th></tr>${openings}</table>` : ""}
     ${weak ? `<p><b>Where Nemesis will take you:</b> ${weak}</p>` : ""}
     <div class="row"><button class="ghost" id="retrain">Retrain</button></div>`;
   renderInsights(player);
   $("retrain").onclick = async () => { const { job } = await api(`/api/train/${encodeURIComponent(player)}`, {}); watchJob(job); showTab("import"); };
+}
+
+// How you play by time control, and whether Nemesis keeps a separate profile for each.
+function byTimeControl(p) {
+  const tcs = (p.metrics && p.metrics.time_controls) || {}, stats = p.by_time_control || {};
+  const rows = Object.entries(tcs).filter(([, t]) => t.games > 0).map(([g, t]) => {
+    const st = stats[g];
+    const used = t.active ? "its own profile" : t.reason ? `your main profile <span class="muted">(${escapeHtml(t.reason)})</span>` : "your main profile";
+    return `<tr><td>${escapeHtml(t.label)}</td><td class="n">${t.games}</td>
+      <td class="n">${st ? pct(st.best) : "–"}</td><td class="n">${st ? st.loss.toFixed(2) : "–"}</td>
+      <td class="n">${st ? pct(st.blunder) : "–"}</td><td>${used}</td></tr>`;
+  });
+  if (rows.length < 2) return "";
+  const notes = Object.values(stats).flatMap(st => st.notes.map(n => `<li>In ${escapeHtml(st.label.toLowerCase())} games ${escapeHtml(n.text)}.</li>`));
+  return `<h3>By time control</h3>
+    <table><tr><th>Time control</th><th class="n">games</th><th class="n">best move</th><th class="n">pawns lost / move</th><th class="n">blunders</th><th>Nemesis predicts you with</th></tr>${rows.join("")}</table>
+    ${notes.length ? `<ul>${notes.join("")}</ul>` : `<p class="muted">No differences between time controls bigger than chance yet.</p>`}
+    <p class="muted">A time control gets its own profile once it has ${10} games and that profile predicts its newest games better than your main one.</p>`;
 }
 
 async function watchJob(id) {
