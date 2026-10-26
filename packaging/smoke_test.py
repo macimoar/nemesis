@@ -46,8 +46,11 @@ def main(exe: str) -> None:
             assert maia == "ready", f"Maia-2 didn't load in the built app: {maia}"
             game = httpx.post(f"{url}/api/games", json={"player": "smoke", "color": "black"}, timeout=180).json()
             assert game["last"], f"Nemesis didn't move: {game}"
+            assert game.get("opening"), f"no opening name after {game['last']}: is nemesis/data in the bundle?"
+            assert len(game.get("evals", [])) == 1, f"no evaluation recorded: {game.get('evals')}"
             setup = httpx.get(f"{url}/api/setup", timeout=10).json()
-            print(f"OK: {url}, Nemesis played {game['last']}, engine {setup.get('engine')}, Maia-2 {setup.get('maia')}")
+            print(f"OK: {url}, Nemesis played {game['last']} ({game['opening']['name']}), "
+                  f"engine {setup.get('engine')}, Maia-2 {setup.get('maia')}")
         finally:
             stop(proc)
             log.close()
