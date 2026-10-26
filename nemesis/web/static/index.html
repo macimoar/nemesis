@@ -32,7 +32,7 @@
   header h1 span { color: var(--accent); }
   header p { margin: 0; color: var(--muted); }
   main { display: grid; grid-template-columns: minmax(0, 560px) minmax(0, 1fr); gap: 20px; padding: 12px 24px 32px; }
-  @media (max-width: 960px) { main { grid-template-columns: 1fr; padding: 12px 16px 24px; } header { padding: 16px 16px 4px; flex-wrap: wrap; } }
+  @media (max-width: 960px) { main { grid-template-columns: minmax(0, 1fr); padding: 12px 16px 24px; } header { padding: 16px 16px 4px; flex-wrap: wrap; } }
   .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 16px; }
   h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); margin: 0 0 10px; }
   h3 { font-size: 14px; margin: 16px 0 6px; }
@@ -48,6 +48,22 @@
   .board { position: relative; touch-action: none; }
   .sq.hover { box-shadow: inset 0 0 0 4px rgba(255, 255, 255, .75); }
   .sq.dragfrom .pc { opacity: .3; }
+  .boardwrap { display: flex; gap: 8px; margin-top: 12px; align-items: stretch; }
+  .boardwrap .board { flex: 1; min-width: 0; }
+  .evalbar { position: relative; width: 28px; flex: none; border-radius: 4px; overflow: hidden; background: var(--graph-black); }
+  .evalbar i { position: absolute; left: 0; right: 0; bottom: 0; background: var(--graph-white); transition: height .5s ease; }
+  .evalbar.flip i { top: 0; bottom: auto; }
+  .evalbar span { position: absolute; left: 0; right: 0; font-size: 10px; letter-spacing: -.2px; text-align: center; font-weight: 600;
+                  font-variant-numeric: tabular-nums; color: var(--graph-black); bottom: 3px; }
+  .evalbar.ahead-black span, .evalbar.flip:not(.ahead-black) span { color: var(--graph-white); }
+  .evalbar.ahead-black span { top: 3px; bottom: auto; } .evalbar.flip span { top: 3px; bottom: auto; }
+  .evalbar.flip.ahead-black span { top: auto; bottom: 3px; }
+  .opening { margin-top: 10px; font-size: 13px; color: var(--muted); min-height: 1.3em; }
+  .opening b { color: var(--ink); font-weight: 600; }
+  .graph.live { height: 64px; margin-top: 8px; cursor: default; }
+  .graphtip { font-size: 12px; min-height: 1.3em; margin-top: 2px; }
+  .shift { font-size: 12px; font-weight: 600; margin-left: 6px; font-variant-numeric: tabular-nums; }
+  .shift.down { color: var(--l-mistake); } .shift.bad { color: var(--l-blunder); } .shift.up { color: var(--good); } .shift.flat { color: var(--muted); }
   .pc.ghost { position: fixed; z-index: 50; pointer-events: none; transform: translate(-50%, -50%); inset: auto; }
   .promo { position: absolute; z-index: 20; width: 12.5%; display: flex; flex-direction: column;
            background: var(--panel); border-radius: 6px; box-shadow: 0 6px 24px rgba(0, 0, 0, .35); overflow: hidden; }
@@ -234,7 +250,15 @@
     </div>
     <div id="strip" class="strip"></div>
     <div id="clock-top" class="clock hidden"><span class="who">Nemesis</span><span class="time"></span></div>
-    <div style="margin-top:12px"><div id="board" class="board"></div></div>
+    <div id="opening" class="opening hidden" aria-live="polite"></div>
+    <div class="boardwrap">
+      <div id="evalbar" class="evalbar hidden" role="img" aria-label="Evaluation"><i></i><span></span></div>
+      <div id="board" class="board"></div>
+    </div>
+    <div id="evalgraph" class="hidden">
+      <svg id="livegraph" class="graph live" preserveAspectRatio="none" role="img" aria-label="How the game has gone"></svg>
+      <div id="graphtip" class="muted graphtip"></div>
+    </div>
     <div id="clock-bottom" class="clock hidden"><span class="who">You</span><span class="time"></span></div>
     <div id="playbar">
       <div class="row">
@@ -564,7 +588,7 @@ function update() {
   for (const m of [...game.log].reverse()) {
     const d = document.createElement("div");
     d.className = "msg " + m.who + (m.kind === "reaction" ? " reaction" : "");
-    if (m.who === "you") d.innerHTML = `<b>You</b>${m.san}`;
+    if (m.who === "you") d.innerHTML = `<b>You</b>${m.san}${shiftTag(m)}`;
     else d.innerHTML = `<b>${m.kind === "move" ? oppName() + " plays " + m.san : m.kind === "info" ? "Nemesis" : oppName()}</b>${speech(m.lines || [])}${drillButton(m)}`;
     log.appendChild(d);
   }
@@ -575,6 +599,7 @@ function update() {
   if (game.doppel) $("strip").innerHTML = `<span>Practice game vs <b>${escapeHtml(game.opponent)}</b></span><span class="muted">not rated</span>`;
   else renderStrip(game.ratings, game.tier, game.elo);
   showThinking();
+  renderEval();
   if (game.finished) setTimeout(() => loadProfile($("player").value), 4000);
 }
 
@@ -815,7 +840,7 @@ $("newgame").onclick = async () => {
   catch (e) { $("status").textContent = e.message; }
 };
 $("resign").onclick = async () => { if (game) { game = await api(`/api/games/${game.id}/resign`, {}); update(); } };
-$("flip").onclick = () => { flipped = !flipped; render(); };
+$("flip").onclick = () => { flipped = !flipped; render(); if (game) renderEval(); };
 
 // ---------------------------------------------------------------------------
 // Ratings
@@ -890,7 +915,8 @@ async function openReview(id) {
 function enterReview(data) {
   if (puz) exitPuzzles(false);
   if (explore) exitExplore();
-  review = data; rply = -1; selected = null;
+  review = data;
+  ["opening", "evalbar", "evalgraph"].forEach(id => $(id).classList.add("hidden")); rply = -1; selected = null;
   flipped = data.game.you === "black";
   $("playbar").classList.add("hidden"); $("reviewbar").classList.remove("hidden");
   $("reviewtab").classList.remove("hidden");
@@ -902,7 +928,7 @@ function exitReview() {
   $("playbar").classList.remove("hidden"); $("reviewbar").classList.add("hidden");
   $("reviewtab").classList.add("hidden");
   flipped = game ? game.human === "black" : false;
-  render(); showTab("profile");
+  render(); if (game) renderEval(); showTab("profile");
 }
 
 function goto(ply) {
@@ -1050,6 +1076,7 @@ async function nextDrill(kind, skip, opening) {
   clearTimeout(pzTimer);
   puz = { kind, opening, p: puzzle, result: null, shown: puzzle.fen, last: null, misses: [], notes: [], tryNote: "" };
   pzHints = 0; selected = null; flipped = puzzle.color === "black";
+  ["opening", "evalbar", "evalgraph"].forEach(id => $(id).classList.add("hidden"));
   $("pz-hint").textContent = "Hint";
   $("playbar").classList.add("hidden"); $("reviewbar").classList.add("hidden"); $("puzzlebar").classList.remove("hidden");
   ["clock-top", "clock-bottom"].forEach(id => $(id).classList.add("hidden"));
@@ -1246,6 +1273,7 @@ async function openExplore(drill) {
   if (puz) exitPuzzles(false);
   $("ex-now").innerHTML = `<span class="muted">Working out the lines…</span>`;
   $("playbar").classList.add("hidden"); $("explorebar").classList.remove("hidden");
+  ["opening", "evalbar", "evalgraph"].forEach(id => $(id).classList.add("hidden"));
   ["clock-top", "clock-bottom"].forEach(id => $(id).classList.add("hidden"));
   explore = { data: { fen: drill.fen, you: game.human, legal: {}, played: { steps: [] }, best: { steps: [] } },
               drill, line: "played", i: -1, own: [], busy: true };
@@ -1318,6 +1346,92 @@ document.addEventListener("keydown", (e) => {
   if (e.key === "ArrowLeft") { exploreGo(explore.line, explore.i - 1); e.preventDefault(); }
   if (e.key === "ArrowRight") { exploreGo(explore.line, explore.i + 1); e.preventDefault(); }
 });
+
+// ---------------------------------------------------------------------------
+// X-Ray: the evaluation, live. Opening names in every mode.
+// ---------------------------------------------------------------------------
+const winPct = (cp) => 50 + 50 * (2 / (1 + Math.exp(-0.00368208 * Math.max(-2000, Math.min(2000, cp)))) - 1);
+const pawns = (cp) => Math.abs(cp) >= 1500 ? (cp > 0 ? "+M" : "−M") : (cp >= 0 ? "+" : "−") + (Math.abs(cp) / 100).toFixed(1);
+const xray = () => game && game.commentary !== "poker";
+
+// The eval before ply i (i = index into game.evals), White's view. Before the first move: level.
+const evalBefore = (i) => i > 0 ? game.evals[i - 1] : 20;
+// game.evals has one entry per ply (games start from the usual position, White first);
+// your moves are the even plies as White, the odd ones as Black.
+function yourPlies() {
+  const out = [];
+  for (let i = game.human === "white" ? 0 : 1; i < game.evals.length; i += 2) out.push(i);
+  return out;
+}
+function shiftOf(i) {
+  const after = game.evals[i], before = evalBefore(i);
+  if (after == null || before == null) return null;
+  return (after - before) * (game.human === "white" ? 1 : -1);   // from your side
+}
+function shiftTag(entry) {
+  if (!xray() || !game.evals) return "";
+  const k = game.log.filter(e => e.who === "you" && e.san !== "offers a draw").indexOf(entry);
+  const ply = yourPlies()[k];
+  if (k < 0 || ply === undefined) return "";
+  const d = shiftOf(ply);
+  if (d == null) return "";
+  const cls = d <= -300 ? "bad" : d <= -100 ? "down" : d >= 50 ? "up" : "flat";
+  return `<span class="shift ${cls}" title="How much this move changed the evaluation, from your side">${d > 0 ? "+" : d < 0 ? "−" : "±"}${(Math.abs(d) / 100).toFixed(1)}</span>`;
+}
+
+function renderEval() {
+  const live = game && !review && !puz && !explore;
+  const op = live && game.opening;
+  $("opening").classList.toggle("hidden", !live);
+  $("opening").innerHTML = op ? `<b>${escapeHtml(op.eco)}</b> · ${escapeHtml(op.name)}` : (live && game.log.length ? "" : "");
+  const show = live && xray() && game.evals && game.evals.length > 0;
+  $("evalbar").classList.toggle("hidden", !(live && xray()));
+  $("evalgraph").classList.toggle("hidden", !show);
+  const cp = game && game.evals && game.evals.length ? game.evals[game.evals.length - 1] ?? 20 : 20;
+  const bar = $("evalbar");
+  bar.classList.toggle("flip", flipped);
+  bar.classList.toggle("ahead-black", cp < 0);
+  bar.querySelector("i").style.height = `${winPct(cp)}%`;
+  bar.querySelector("span").textContent = pawns(cp);
+  bar.title = `Stockfish: ${pawns(cp)} (White's view)`;
+  if (show) drawLiveGraph();
+}
+
+function drawLiveGraph() {
+  const svg = $("livegraph"), ev = game.evals, W = 1000, H = 100;
+  const pts = [20, ...ev].map(v => v == null ? null : winPct(v));
+  for (let i = 0; i < pts.length; i++) if (pts[i] == null) pts[i] = i ? pts[i - 1] : 50;
+  const n = Math.max(pts.length, 20);      // a short game doesn't fill the whole width
+  const x = (i) => (i / (n - 1)) * W, y = (v) => H - v;
+  const line = pts.map((v, i) => `${x(i)},${y(v)}`).join(" ");
+  const marks = yourPlies().map(i => {
+    const d = shiftOf(i);
+    if (d == null || d > -100) return "";
+    const lab = d <= -300 ? "blunder" : "mistake";
+    return `<circle cx="${x(i + 1)}" cy="${y(pts[i + 1])}" r="11" style="fill:var(--l-${lab})" data-ply="${i}"/>`;
+  }).join("");
+  const right = x(pts.length - 1);
+  svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+  // Moves not played yet stay neutral, so an early game doesn't look like Black is winning.
+  svg.innerHTML = `<rect width="${W}" height="${H}" fill="var(--line)"/>
+    <rect width="${right}" height="${H}" fill="var(--graph-black)"/>
+    <polygon points="0,${H} ${line} ${right},${H}" fill="var(--graph-white)"/>
+    <line x1="0" x2="${W}" y1="${H / 2}" y2="${H / 2}" stroke="var(--muted)" stroke-dasharray="6 6" stroke-width="1"/>
+    <line x1="${right}" x2="${right}" y1="0" y2="${H}" stroke="var(--accent)" stroke-width="3"/>${marks}`;
+  const mistakes = yourPlies().filter(i => (shiftOf(i) ?? 0) <= -100).length;
+  $("graphtip").textContent = `White's share of the game, move by move${mistakes ? ` · dots: your ${mistakes} mistake${mistakes > 1 ? "s" : ""}` : ""}. Hover for details.`;
+}
+$("livegraph").addEventListener("mousemove", (e) => {
+  if (!game || !game.evals || !game.evals.length) return;
+  const r = $("livegraph").getBoundingClientRect(), n = Math.max(game.evals.length + 1, 20);
+  const i = Math.round(((e.clientX - r.left) / r.width) * (n - 1)) - 1;
+  if (i < 0 || i >= game.evals.length) return;
+  const mine = yourPlies().includes(i), d = mine ? shiftOf(i) : null;
+  const no = Math.floor(i / 2) + 1;
+  $("graphtip").textContent = `Move ${no}, ${mine ? "you" : oppName()}: ${pawns(game.evals[i] ?? 0)} (White's view)` +
+    (d != null ? ` · your move changed it by ${d > 0 ? "+" : d < 0 ? "−" : "±"}${(Math.abs(d) / 100).toFixed(1)}` : "");
+});
+$("livegraph").addEventListener("mouseleave", () => game && game.evals && drawLiveGraph());
 
 for (let e = 800; e <= 2400; e += 100) $("strength").insertAdjacentHTML("beforeend", `<option value="${e}">${e}${e === 2400 ? " (full strength)" : ""}</option>`);
 try { const saved = localStorage.getItem("nemesis-strength"); if (saved) $("strength").value = saved; } catch (e) {}

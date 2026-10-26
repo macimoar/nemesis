@@ -33,6 +33,16 @@ def game_id(game: chess.pgn.Game, source: str) -> str:
 
 
 def opening_name(game: chess.pgn.Game) -> str | None:
+    """From the Lichess opening list, by the positions the game went through, so every
+    source (Chess.com, Lichess, games against Nemesis) uses the same names. Failing that,
+    whatever the PGN says."""
+    from nemesis.openings import name_of
+    try:
+        found = name_of(game.end().board())
+    except ValueError:
+        found = None
+    if found:
+        return found["name"]
     h = game.headers
     if h.get("Opening") and h["Opening"] != "?":
         return h["Opening"]

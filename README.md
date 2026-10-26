@@ -4,7 +4,7 @@ Most chess engines calculate the best move. Nemesis calculates the move that bea
 
 It studies your games and learns your playstyle: your openings, your appetite for material, how you attack, what you miss, how you play when the clock runs down. Then it plays the move most likely to make *you* go wrong. It also talks to you, in one of two commentary modes.
 
-**X-Ray** gives the full breakdown. Nemesis never tells you which move it expects from you, so it doesn't bias your thinking. It reacts after you've moved. When you make a mistake (a pawn or more), it tells you the better move and, when it's clear, what went wrong. In untimed games (and in timed ones once they're over) you can press **Explore this mistake**: a side board shows how your move gets punished and what follows the better move, step by step, and you can try moves of your own from that position, with Stockfish answering.
+In every mode, the **opening is named as you play it** (from the Lichess opening list, by position, so transpositions are named correctly). **X-Ray** gives the full breakdown. Nemesis never tells you which move it expects from you, so it doesn't bias your thinking. It reacts after you've moved. When you make a mistake (a pawn or more), it tells you the better move and, when it's clear, what went wrong. X-Ray also shows the game's evaluation live: an **eval bar** beside the board, a **graph** of the game so far with your mistakes marked, and each of your moves tagged with how much it shifted the evaluation (−1.8, +0.2…). In untimed games (and in timed ones once they're over) you can press **Explore this mistake**: a side board shows how your move gets punished and what follows the better move, step by step, and you can try moves of your own from that position, with Stockfish answering.
 
 > **Nemesis plays d6**
 > - **My move:** d6 (pawn to d6).
@@ -230,6 +230,7 @@ nemesis/
   repairs.py    opening repair: your costly opening habits, drilled with spacing
   doppelganger.py  play like any imported player
   maia.py       Maia-2 human-move model: ONNX inference, download on first use
+  openings.py   opening names by position (data/openings.json, from the Lichess list, CC0)
   profile/timecontrols.py  a profile per time control, used only where it predicts better
   engine.py     Nemesis = model + opening tree + search
   launcher.py   double-click entry: free port, reuse a running copy, open the browser

@@ -30,7 +30,8 @@ def test_import_pgn(store):
     assert import_pgn_text(store, PGN, "me", source="lichess") == 0  # deduplicated
     (game,) = store.games("ME")
     assert game.id == "lichess:abcd1234"
-    assert game.color == 0 and game.result == 1.0 and game.opening == "Italian Game"
+    assert game.color == 0 and game.result == 1.0
+    assert game.opening == "Italian Game: Two Knights Defense"   # named by position, more precisely than the header
     moves = store.moves(game.id)
     assert [m.uci for m in moves] == ["e2e4", "e7e5", "g1f3", "b8c6", "f1c4", "g8f6"]
     assert [m.is_player for m in moves] == [0, 1, 0, 1, 0, 1]

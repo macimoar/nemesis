@@ -18,7 +18,8 @@ a = Analysis(
     [str(root / "packaging" / "nemesis_app.py")],
     pathex=[str(root)],
     binaries=stockfish,
-    datas=[(str(root / "nemesis" / "web" / "static"), "nemesis/web/static")],
+    datas=[(str(root / "nemesis" / "web" / "static"), "nemesis/web/static"),
+           (str(root / "nemesis" / "data"), "nemesis/data")],
     hiddenimports=collect_submodules("uvicorn"),
     excludes=["tkinter", "pytest", "playwright"],
 )

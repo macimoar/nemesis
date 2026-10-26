@@ -21,7 +21,7 @@ from pydantic import BaseModel
 
 from nemesis.analysis.install import ensure_stockfish
 from nemesis.analysis.stockfish import StockfishAnalyzer
-from nemesis import commentary, maia, puzzles, ratings, repairs, timecontrol
+from nemesis import commentary, maia, openings, puzzles, ratings, repairs, timecontrol
 from nemesis import doppelganger
 from nemesis.doppelganger import Doppelganger
 from nemesis.engine import Nemesis
@@ -142,6 +142,7 @@ class Game:
     reason: str = ""                                 # how it ended, when not by the board
     last_draw_offer: int = -99                       # your move number when you last offered a draw
     doppel: Doppelganger | None = None               # set when playing a Doppelgänger, not Nemesis
+    evals: list = field(default_factory=list)        # Stockfish eval after each ply, White's view (cp)
 
     @property
     def opponent(self) -> str:
@@ -231,6 +232,18 @@ def create_app(db: str | Path = DEFAULT_DB, depth: int = 10) -> FastAPI:
             if g.player == job.player:
                 g.engine.reload()
 
+    def eval_after(g: Game, move: chess.Move) -> int | None:
+        """Stockfish's eval once `move` is played on g.board, from White's side. Usually
+        already cached: the reaction or the search looked at it."""
+        try:
+            lines = g.engine.analyzer.lines(g.board, extra=[move.uci()])
+        except Exception:
+            return None
+        cp = lines.get(move.uci())
+        if cp is None:
+            return None
+        return cp if g.board.turn == chess.WHITE else -cp
+
     def state(g: Game) -> dict:
         legal: dict[str, list[str]] = {}
         if not g.finished and g.board.turn == g.human:
@@ -247,6 +260,7 @@ def create_app(db: str | Path = DEFAULT_DB, depth: int = 10) -> FastAPI:
             "fixed_elo": g.engine.fixed_elo, "ratings": ratings.summary(store, g.player, g.engine.tc),
             "game_id": g.game_id, "reason": g.reason,
             "opponent": g.opponent, "doppel": g.doppel.name if g.doppel else None,
+            "evals": g.evals, "opening": openings.name_of(g.board),
             "draw_offer_in": max(0, DRAW_OFFER_GAP - (g.board.fullmove_number - g.last_draw_offer)),
             "clock": None if not g.tc else {
                 "white": g.time_left(chess.WHITE), "black": g.time_left(chess.BLACK),
@@ -318,7 +332,9 @@ def create_app(db: str | Path = DEFAULT_DB, depth: int = 10) -> FastAPI:
             if not end_move_clock(g, me):
                 out_of_time(g, me)
                 return
+            cp_after = eval_after(g, move)
             g.board.push(move)
+            g.evals.append(cp_after)
             entry = {"who": "nemesis", "kind": "move", "san": san, "lines": lines}
             if g.doppel.mode == commentary.XRAY:
                 entry["choices"] = choices
@@ -332,7 +348,13 @@ def create_app(db: str | Path = DEFAULT_DB, depth: int = 10) -> FastAPI:
         if not end_move_clock(g, me):
             out_of_time(g, me)
             return
+        played = next((c for c in decision.candidates if c.uci == decision.move.uci()), None)
+        if played is not None:   # the search already evaluated it (for Nemesis, the side to move)
+            cp_after = played.cp if me == chess.WHITE else -played.cp
+        else:
+            cp_after = eval_after(g, decision.move)
         g.board.push(decision.move)
+        g.evals.append(cp_after)
         g.pending = decision
         entry = {"who": "nemesis", "kind": "move", "san": san, "lines": decision.lines}
         if g.engine.mode == commentary.XRAY:  # Poker Face keeps its numbers to itself
@@ -469,6 +491,7 @@ def create_app(db: str | Path = DEFAULT_DB, depth: int = 10) -> FastAPI:
             out_of_time(g, g.human)
             return state(g)
         g.log.append({"who": "you", "san": g.board.san(move)})
+        cp_after = eval_after(g, move)
         if g.pending is not None:
             entry = {"who": "nemesis", "kind": "reaction", "lines": g.engine.react(g.board, g.pending, move)}
             if g.engine.drill:
@@ -477,6 +500,7 @@ def create_app(db: str | Path = DEFAULT_DB, depth: int = 10) -> FastAPI:
             if g.annotations and g.pending.reply:
                 g.annotations[-1]["reply"] = g.pending.reply
         g.board.push(move)
+        g.evals.append(cp_after)
         nemesis_turn(g)
         return state(g)
 

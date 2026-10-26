@@ -28,6 +28,7 @@ include = ["nemesis*"]
 
 [tool.setuptools.package-data]
 "nemesis.web" = ["static/*"]
+"nemesis" = ["data/*.json"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

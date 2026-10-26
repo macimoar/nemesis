@@ -444,6 +444,26 @@ def _m1_ratings_per_time_control(conn: sqlite3.Connection) -> None:
                      "(entity LIKE 'nemesis:%' AND length(entity) - length(replace(entity, ':', '')) = 2)")
 
 
+def _m2_opening_names(conn: sqlite3.Connection) -> None:
+    """v0.5: every game's opening is named from the Lichess opening list (by position),
+    instead of the source's own naming (Chess.com's came from a URL; Nemesis games had none)."""
+    import io
+
+    import chess.pgn
+
+    from nemesis.openings import name_of
+    rows = conn.execute("SELECT id, pgn FROM games").fetchall()
+    for gid, pgn in rows:
+        try:
+            game = chess.pgn.read_game(io.StringIO(pgn))
+            found = name_of(game.end().board()) if game else None
+        except ValueError:
+            found = None
+        if found:
+            conn.execute("UPDATE games SET opening = ? WHERE id = ?", (found["name"], gid))
+
+
 MIGRATIONS = [
     (1, _m1_ratings_per_time_control),
+    (2, _m2_opening_names),
 ]
