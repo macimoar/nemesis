@@ -1783,7 +1783,7 @@ async function renderInsights(player) {
     <div class="k muted" style="font-size:13px;margin-top:8px">Moves Nemesis guessed exactly, per game</div>
     <div class="chartwrap" id="ins-chart"></div>
     ${train ? `<p class="muted" style="font-size:13px">Last training: on your newest imported games it guessed ${pct(train.top1)}
-      of moves, against ${pct(train.baseline)} for a generic player model.</p>` : ""}`;
+      of moves, against ${pct(train.baseline)} before it learned anything about you.</p>` : ""}`;
   drawInsightsChart(d.per_game);
 }
 
