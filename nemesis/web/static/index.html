@@ -48,6 +48,7 @@
   .board { position: relative; touch-action: none; }
   .sq.hover { box-shadow: inset 0 0 0 4px rgba(255, 255, 255, .75); }
   .sq.dragfrom .pc { opacity: .3; }
+  .board .marks { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 3; }
   .boardwrap { display: flex; gap: 8px; margin-top: 12px; align-items: stretch; }
   .boardwrap .board { flex: 1; min-width: 0; }
   .evalbar { position: relative; width: 28px; flex: none; border-radius: 4px; overflow: hidden; background: var(--graph-black); }
@@ -448,6 +449,7 @@ function render() {
     if (r === 7) d.insertAdjacentHTML("beforeend", `<span class="coord f">${"abcdefgh"[file]}</span>`);
     el.appendChild(d);
   }
+  drawMarks(fen);
 }
 
 // ---------------------------------------------------------------------------
@@ -530,14 +532,16 @@ function squareAt(x, y) {
 }
 
 $("board").addEventListener("pointerdown", (e) => {
+  if (e.button === 0 && clearMarks()) render();   // a left click wipes your arrows, as on Lichess
   const sqEl = e.target.closest(".sq");
   if (!sqEl || !canMove() || e.button > 0) return;
   const name = sqEl.dataset.sq;
   if (selected && selected !== name && tryMove(selected, name)) return;   // click-to-move
   if (!movesFrom(name).length) { selected = null; render(); return; }
+  const again = selected === name;   // clicking the selected piece again lets go of it
   selected = name;
   render();
-  drag = { from: name, x: e.clientX, y: e.clientY, ghost: null, over: null };
+  drag = { from: name, x: e.clientX, y: e.clientY, ghost: null, over: null, again };
   $("board").setPointerCapture(e.pointerId);
   e.preventDefault();
 });
@@ -568,7 +572,10 @@ function endDrag(e, cancelled) {
   if (!drag) return;
   const d = drag;
   drag = null;
-  if (!d.ghost) return;   // it was a click: the piece stays selected
+  if (!d.ghost) {          // it was a click: the piece stays selected, unless it already was
+    if (d.again && !cancelled) { selected = null; render(); }
+    return;
+  }
   d.ghost.remove();
   const to = cancelled ? null : squareAt(e.clientX, e.clientY);
   if (!(to && to !== d.from && tryMove(d.from, to))) render();   // not a legal square: snap back
@@ -1432,6 +1439,86 @@ $("livegraph").addEventListener("mousemove", (e) => {
     (d != null ? ` · your move changed it by ${d > 0 ? "+" : d < 0 ? "−" : "±"}${(Math.abs(d) / 100).toFixed(1)}` : "");
 });
 $("livegraph").addEventListener("mouseleave", () => game && game.evals && drawLiveGraph());
+
+// ---------------------------------------------------------------------------
+// Arrows and circles for planning: right-click and drag, like on Lichess.
+// Shift = red, Alt/Ctrl = blue, plain = green. The same one again removes it.
+// They belong to the position on screen, so any move (or a left click) clears them.
+// ---------------------------------------------------------------------------
+let marks = { key: "", arrows: new Map(), circles: new Map() }, rdrag = null;
+const MARK_COLORS = { green: "#15781b", red: "#882020", blue: "#003088" };
+const markColor = (e) => e.shiftKey ? "red" : (e.altKey || e.ctrlKey || e.metaKey) ? "blue" : "green";
+
+function clearMarks() {
+  const had = marks.arrows.size + marks.circles.size > 0;
+  marks.arrows.clear(); marks.circles.clear();
+  return had;
+}
+
+function squareXY(sq) {   // centre of a square in board units (0..8), as currently oriented
+  const file = sq.charCodeAt(0) - 97, rank = +sq[1];
+  return flipped ? [7 - file + 0.5, rank - 0.5] : [file + 0.5, 8 - rank + 0.5];
+}
+
+function arrowSvg(from, to, color, preview) {
+  const [x1, y1] = squareXY(from), [x2, y2] = squareXY(to);
+  const dx = to.charCodeAt(0) - from.charCodeAt(0), dy = +to[1] - +from[1];
+  const knight = (Math.abs(dx) === 1 && Math.abs(dy) === 2) || (Math.abs(dx) === 2 && Math.abs(dy) === 1);
+  // Knight jumps bend: along the long side first, then the short one.
+  const pts = knight ? (Math.abs(dy) === 2 ? [[x1, y1], [x1, y2], [x2, y2]] : [[x1, y1], [x2, y1], [x2, y2]]) : [[x1, y1], [x2, y2]];
+  const [px, py] = pts[pts.length - 2], len = Math.hypot(x2 - px, y2 - py);
+  const ux = (x2 - px) / len, uy = (y2 - py) / len, head = 0.42;
+  pts[pts.length - 1] = [x2 - ux * head * 0.75, y2 - uy * head * 0.75];   // stop the shaft under the head
+  const tip = [x2 + ux * 0.05, y2 + uy * 0.05], base = [x2 - ux * head, y2 - uy * head];
+  const wing = (s) => `${base[0] - uy * 0.27 * s},${base[1] + ux * 0.27 * s}`;
+  const c = MARK_COLORS[color], o = preview ? 0.45 : 0.8;
+  return `<polyline points="${pts.map(p => p.join(",")).join(" ")}" fill="none" stroke="${c}" stroke-width="0.17"
+      stroke-linejoin="round" opacity="${o}"/><polygon points="${tip.join(",")} ${wing(1)} ${wing(-1)}" fill="${c}" opacity="${o}"/>`;
+}
+
+function drawMarks(fen) {
+  const key = (fen || "").split(" ")[0];
+  if (key !== marks.key) { clearMarks(); marks.key = key; }
+  const board = $("board");
+  board.querySelector(".marks")?.remove();
+  const preview = rdrag && rdrag.to && rdrag.to !== rdrag.from ? arrowSvg(rdrag.from, rdrag.to, rdrag.color, true) : "";
+  if (!marks.arrows.size && !marks.circles.size && !preview) return;
+  const circles = [...marks.circles].map(([sq, color]) => {
+    const [x, y] = squareXY(sq);
+    return `<circle cx="${x}" cy="${y}" r="0.45" fill="none" stroke="${MARK_COLORS[color]}" stroke-width="0.08" opacity="0.8"/>`;
+  }).join("");
+  const arrows = [...marks.arrows].map(([k, color]) => arrowSvg(k.slice(0, 2), k.slice(2, 4), color)).join("");
+  board.insertAdjacentHTML("beforeend",
+    `<svg class="marks" viewBox="0 0 8 8" aria-hidden="true">${circles}${arrows}${preview}</svg>`);
+}
+
+$("board").addEventListener("contextmenu", (e) => e.preventDefault());
+$("board").addEventListener("pointerdown", (e) => {
+  if (e.button !== 2) return;
+  const sq = squareAt(e.clientX, e.clientY);
+  if (!sq) return;
+  rdrag = { from: sq, to: sq, color: markColor(e) };
+  e.preventDefault();
+});
+$("board").addEventListener("pointermove", (e) => {
+  if (!rdrag) return;
+  const sq = squareAt(e.clientX, e.clientY);
+  if (sq && sq !== rdrag.to) { rdrag.to = sq; drawMarks(currentFen()); }
+});
+window.addEventListener("pointerup", (e) => {
+  if (!rdrag || e.button !== 2) return;
+  const { from, color } = rdrag, to = squareAt(e.clientX, e.clientY) || rdrag.to;
+  rdrag = null;
+  const store = from === to ? marks.circles : marks.arrows, k = from === to ? from : from + to;
+  if (store.get(k) === color) store.delete(k); else store.set(k, color);
+  drawMarks(currentFen());
+});
+function currentFen() {   // the position on screen, whichever mode the board is in
+  if (review) return rply < 0 ? review.game.start_fen : review.moves[rply].fen_after;
+  if (puz) return puz.shown;
+  if (explore) return exploreStep() ? exploreStep().fen : explore.data.fen;
+  return game ? game.fen : "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w";
+}
 
 for (let e = 800; e <= 2400; e += 100) $("strength").insertAdjacentHTML("beforeend", `<option value="${e}">${e}${e === 2400 ? " (full strength)" : ""}</option>`);
 try { const saved = localStorage.getItem("nemesis-strength"); if (saved) $("strength").value = saved; } catch (e) {}
