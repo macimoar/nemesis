@@ -88,9 +88,9 @@ class Maia:
     """One Maia-2 model (rapid or blitz). `policy` gives P(move) over the legal moves."""
 
     def __init__(self, model_path: str | Path, moves_path: str | Path, cache_size: int = 20000):
-        import onnxruntime as ort
+        import onnxruntime as ort   # telemetry is already off: see nemesis/__init__.py
         if hasattr(ort, "disable_telemetry_events"):
-            ort.disable_telemetry_events()   # nothing about your games leaves your computer
+            ort.disable_telemetry_events()   # and again, in case it was imported elsewhere first
         opts = ort.SessionOptions()
         opts.intra_op_num_threads = max(1, min(4, (os.cpu_count() or 2) // 2))
         opts.log_severity_level = 3

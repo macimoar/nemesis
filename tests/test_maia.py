@@ -117,3 +117,14 @@ def test_real_model_predicts_sensible_moves():
     # The queen came out to h4: a human chases it.
     probs = m.policy(chess.Board("rnb1kbnr/pppp1ppp/8/4p3/4P2q/2N5/PPPP1PPP/R1BQKBNR w KQkq - 2 13"), 1500, 1500)
     assert max(probs, key=probs.get) == "g1f3"
+
+
+def test_onnxruntime_telemetry_is_off_before_it_can_be_imported():
+    import os
+    import subprocess
+    import sys
+    # A fresh process, as the app starts: importing nemesis must switch it off first.
+    code = "import nemesis, os; print(os.environ.get('ORT_DISABLE_TELEMETRY'))"
+    env = {k: v for k, v in os.environ.items() if k != "ORT_DISABLE_TELEMETRY"}
+    out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, env=env)
+    assert out.stdout.strip() == "1"
