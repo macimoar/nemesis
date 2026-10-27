@@ -70,6 +70,7 @@ jobs:
           mkdir -p "out/Nemesis"
           cp dist/Nemesis* "out/Nemesis/"
           cp "packaging/READ ME FIRST - ${RUNNER_OS}.txt" "out/Nemesis/READ ME FIRST.txt"
+          python packaging/notices.py out/Nemesis   # licences: Nemesis (MIT), Stockfish (GPL v3), the rest
           python -c "import shutil; shutil.make_archive('Nemesis-${{ matrix.name }}', 'zip', 'out')"
 
       - uses: actions/upload-artifact@v4

@@ -57,12 +57,16 @@ def pick_assets(assets: list[dict], preferences: list[str]) -> list[dict]:
     return out
 
 
-def release_assets(client: httpx.Client, tag: str = PINNED_TAG) -> list[dict]:
+def release(client: httpx.Client, tag: str = PINNED_TAG) -> dict:
     resp = client.get(f"{API}/tags/{tag}")
     if resp.status_code == 404:  # pinned tag gone: use the latest release
         resp = client.get(f"{API}/latest")
     resp.raise_for_status()
-    return resp.json().get("assets", [])
+    return resp.json()
+
+
+def release_assets(client: httpx.Client, tag: str = PINNED_TAG) -> list[dict]:
+    return release(client, tag).get("assets", [])
 
 
 def _download(client: httpx.Client, url: str, progress: Progress | None) -> bytes:
@@ -83,26 +87,42 @@ def _is_engine(name: str) -> bool:
         (".txt", ".md", ".nnue", ".h", ".cpp", ".py", ".sh", ".yml", ".zip", ".tar"))
 
 
+# Stockfish is GPLv3: whoever passes the engine on must pass its licence on with it.
+NOTICES = {"copying.txt": "COPYING-Stockfish.txt", "authors": "AUTHORS-Stockfish.txt"}
+
+
 def extract_binary(data: bytes, name: str, dest: Path) -> Path:
-    """Pull the engine executable out of a release archive into `dest`."""
+    """Pull the engine executable out of a release archive into `dest`, with its licence
+    and authors list (as COPYING-Stockfish.txt and AUTHORS-Stockfish.txt)."""
     dest.mkdir(parents=True, exist_ok=True)
     found: tuple[str, bytes] | None = None
+    notices: dict[str, bytes] = {}
     if name.endswith(".zip"):
         with zipfile.ZipFile(io.BytesIO(data)) as zf:
             for info in zf.infolist():
-                if not info.is_dir() and _is_engine(info.filename) and info.file_size > 100_000:
+                if info.is_dir():
+                    continue
+                if os.path.basename(info.filename).lower() in NOTICES:
+                    notices[NOTICES[os.path.basename(info.filename).lower()]] = zf.read(info)
+                elif _is_engine(info.filename) and info.file_size > 100_000:
                     if found is None or info.file_size > len(found[1]):
                         found = (info.filename, zf.read(info))
     else:
         with tarfile.open(fileobj=io.BytesIO(data)) as tf:
             for member in tf.getmembers():
-                if member.isfile() and _is_engine(member.name) and member.size > 100_000:
+                if not member.isfile():
+                    continue
+                if os.path.basename(member.name).lower() in NOTICES:
+                    notices[NOTICES[os.path.basename(member.name).lower()]] = tf.extractfile(member).read()
+                elif _is_engine(member.name) and member.size > 100_000:
                     if found is None or member.size > len(found[1]):
                         found = (member.name, tf.extractfile(member).read())
     if found is None:
         raise RuntimeError(f"no Stockfish executable inside {name}")
     target = dest / os.path.basename(found[0])
     target.write_bytes(found[1])
+    for fname, content in notices.items():
+        (dest / fname).write_bytes(content)
     target.chmod(target.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
     return target
 
@@ -144,7 +164,8 @@ def download_stockfish(dest: Path = INSTALL_DIR, progress: Progress | None = Non
     try:
         if progress:
             progress("Finding the right Stockfish for this computer", 0.0)
-        candidates = pick_assets(release_assets(client), preferences or build_preferences())
+        rel = release(client)
+        candidates = pick_assets(rel.get("assets", []), preferences or build_preferences())
         if not candidates:
             raise RuntimeError(f"no Stockfish build for {platform.system()} {platform.machine()}")
         for asset in candidates:
@@ -154,6 +175,11 @@ def download_stockfish(dest: Path = INSTALL_DIR, progress: Progress | None = Non
             path = extract_binary(data, asset["name"], dest)
             if works(path):
                 (dest / "ENGINE").write_text(path.name)
+                tag = rel.get("tag_name", PINNED_TAG)
+                (dest / "SOURCE-Stockfish.txt").write_text(
+                    f"Stockfish {tag} ({asset['name']}), free software under the GNU GPL v3 (see COPYING-Stockfish.txt).\n"
+                    f"Its complete source code: https://github.com/official-stockfish/Stockfish/tree/{tag}\n"
+                    f"The same source is inside the official download: {asset['browser_download_url']}\n")
                 return str(path)
             path.unlink(missing_ok=True)  # this CPU can't run that build: try the next one
         raise RuntimeError("none of the Stockfish builds run on this computer")

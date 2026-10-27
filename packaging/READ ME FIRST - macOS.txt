@@ -11,3 +11,6 @@ If macOS still refuses: open System Settings > Privacy & Security, scroll down,
 and click "Open Anyway" next to Nemesis.
 
 Your games and everything Nemesis learns stay on this computer (in your home folder, under .nemesis).
+
+Nemesis is free software (MIT licence, LICENSE.txt). It includes Stockfish and other
+open-source software under their own licences: see the "licenses" folder.

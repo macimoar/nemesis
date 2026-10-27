@@ -241,6 +241,17 @@ packaging/      PyInstaller spec, smoke test, per-OS "READ ME FIRST" notes
 tests/
 ```
 
+## Licence
+
+Nemesis's code is under the [MIT licence](LICENSE).
+
+The download-and-run app also contains other people's free software, each under its own licence, all listed in the zip's `licenses` folder:
+- **Stockfish** is under the GNU GPL v3. It runs as a separate program, and the zip includes its licence, its authors and a link to the exact source code it was built from.
+- **python-chess** is also under the GNU GPL v3. Because the app is built with it, the app as a whole is distributed under the GPL v3. Nemesis's own source stays MIT.
+- **Maia-2** is MIT. It isn't in the zip: it's downloaded on first use, along with its licence.
+
+`packaging/notices.py` writes those files when the release is built.
+
 ## Roadmap
 
 What comes next, and what would make it v1.0: see [ROADMAP.md](ROADMAP.md).

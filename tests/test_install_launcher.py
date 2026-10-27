@@ -77,6 +77,19 @@ def test_download_falls_back_when_fast_build_cannot_run(tmp_path):
     assert "Downloading Stockfish" in steps
 
 
+def test_stockfish_licence_travels_with_it(tmp_path):
+    # Stockfish is GPLv3: its licence, authors and where its source is go wherever the engine goes.
+    archives = {"stockfish-ubuntu-x86-64.tar": tar_of({"stockfish/stockfish-ubuntu-x86-64": GOOD,
+                                                       "stockfish/Copying.txt": "GNU GENERAL PUBLIC LICENSE",
+                                                       "stockfish/AUTHORS": "Tord Romstad"})}
+    path = install.download_stockfish(tmp_path, client=fake_github(archives), preferences=["ubuntu-x86-64"])
+    assert (tmp_path / "COPYING-Stockfish.txt").read_text() == "GNU GENERAL PUBLIC LICENSE"
+    assert (tmp_path / "AUTHORS-Stockfish.txt").read_text() == "Tord Romstad"
+    source = (tmp_path / "SOURCE-Stockfish.txt").read_text()
+    assert f"tree/{install.PINNED_TAG}" in source and "GPL" in source
+    assert install.downloaded(tmp_path) == path        # the extra files don't confuse the lookup
+
+
 def test_download_reports_when_nothing_runs(tmp_path):
     archives = {"stockfish-ubuntu-x86-64.tar": tar_of({"stockfish/stockfish-ubuntu-x86-64": BAD})}
     with pytest.raises(RuntimeError, match="none of the Stockfish builds run"):
