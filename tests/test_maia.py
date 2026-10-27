@@ -128,3 +128,18 @@ def test_onnxruntime_telemetry_is_off_before_it_can_be_imported():
     env = {k: v for k, v in os.environ.items() if k != "ORT_DISABLE_TELEMETRY"}
     out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, env=env)
     assert out.stdout.strip() == "1"
+
+
+def test_says_why_maia_is_unavailable(monkeypatch):
+    import builtins
+    real = builtins.__import__
+
+    def no_onnxruntime(name, *a, **k):
+        if name == "onnxruntime":
+            raise ImportError(name)
+        return real(name, *a, **k)
+    monkeypatch.setattr(builtins, "__import__", no_onnxruntime)
+    monkeypatch.delenv("NEMESIS_NO_MAIA", raising=False)
+    assert "onnxruntime" in maia.unavailable_reason() and "Python 3.11 to 3.14" in maia.unavailable_reason()
+    monkeypatch.setenv("NEMESIS_NO_MAIA", "1")
+    assert "turned off" in maia.unavailable_reason()

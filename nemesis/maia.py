@@ -240,6 +240,20 @@ def download(kind: str, dest: Path = DIR, progress: Progress | None = None) -> P
     return dest
 
 
+def unavailable_reason() -> str | None:
+    """Why Maia-2 can't run here, in words for the player; None if nothing stops it."""
+    if os.environ.get("NEMESIS_NO_MAIA"):
+        return "Maia-2 is turned off (NEMESIS_NO_MAIA is set)."
+    try:
+        import onnxruntime  # noqa: F401
+    except ImportError:
+        import sys
+        v = f"{sys.version_info.major}.{sys.version_info.minor}"
+        return (f"Maia-2 needs the onnxruntime package, which isn't installed. It has no version for "
+                f"Python {v} yet: use Python 3.11 to 3.14, or the download-and-run app from the Releases page.")
+    return None
+
+
 _loaded: dict[str, Maia | None] = {}
 _lock = __import__("threading").Lock()   # one download at a time
 

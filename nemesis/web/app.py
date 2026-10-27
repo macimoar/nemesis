@@ -192,7 +192,9 @@ def create_app(db: str | Path = DEFAULT_DB, depth: int = 10) -> FastAPI:
         def progress(msg: str, frac: float) -> None:
             setup.update(maia="downloading", maia_progress=frac)
         found = [maia.get(kind, progress=progress) for kind in ("rapid", "blitz")]
-        setup.update(maia="ready" if all(found) else "unavailable", maia_progress=1.0)
+        why = None if all(found) else (maia.unavailable_reason() or
+                                       "The Maia-2 model couldn't be downloaded. Check your internet connection and restart Nemesis.")
+        setup.update(maia="ready" if all(found) else "unavailable", maia_progress=1.0, maia_note=why)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):

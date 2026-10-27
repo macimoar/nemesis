@@ -16,7 +16,9 @@ dependencies = [
     "httpx>=0.25",
     "fastapi>=0.110",
     "uvicorn>=0.25",
-    "onnxruntime>=1.17",
+    # Runs the Maia-2 human-move model. Only where onnxruntime has builds (Python 3.11-3.14 today);
+    # elsewhere Nemesis works without Maia-2 and says so on the Profile tab.
+    "onnxruntime>=1.17; python_version < '3.15'",
 ]
 
 [project.optional-dependencies]

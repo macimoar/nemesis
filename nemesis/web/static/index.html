@@ -157,6 +157,7 @@
   .moves button { background: transparent; color: var(--ink); border: 0; padding: 2px 6px; border-radius: 6px; text-align: left; font: inherit; }
   .moves button.on { background: var(--accent-soft); }
   .now { margin-top: 10px; min-height: 2.8em; }
+  .note { border-left: 3px solid var(--accent); background: var(--accent-soft); padding: 8px 12px; border-radius: 6px; font-size: 14px; }
   .now ul { margin: 6px 0 0; padding-left: 20px; }
   .good { color: var(--good); } .bad { color: var(--l-blunder); }
   .hint { color: var(--l-inaccuracy); }
@@ -944,6 +945,7 @@ async function loadProfile(player) {
   try { p = await api(`/api/profile/${encodeURIComponent(player)}`); }
   catch (e) { $("profile").innerHTML = `<p class="muted">${escapeHtml(e.message)}</p>`; return; }
   const h = p.metrics && p.metrics.holdout, pr = p.metrics && p.metrics.holdout_prior;
+  const setup = await api("/api/setup").catch(() => ({}));
   const maxAbs = Math.max(0.5, ...p.traits.map(t => Math.abs(t.delta)));
   const traits = p.traits.map(t => {
     const w = 50 * Math.abs(t.delta) / maxAbs;
@@ -960,6 +962,10 @@ async function loadProfile(player) {
     <p class="muted">${p.games} games · ${p.moves_analysed} moves analysed · overall score ${pct(p.score)}</p>
     ${h ? `<p>On your newest games, Nemesis predicts your exact move <b>${pct(h.top1)}</b> of the time (top 3: ${pct(h.top3)}).
       ${p.metrics.maia ? `A typical human at your rating (Maia-2) gets ${pct(pr.top1)}` : `A generic player model gets ${pct(pr.top1)}`}; "you'll play Stockfish's move" gets ${pct(h.stockfish_top1)}.</p>` : ""}
+    ${p.metrics && !p.metrics.maia && setup.maia === "unavailable" && setup.maia_note ?
+      `<p class="note">Without Maia-2, Nemesis predicts your moves less accurately. ${escapeHtml(setup.maia_note)}</p>` :
+      p.metrics && !p.metrics.maia && setup.maia === "ready" ?
+      `<p class="note">Maia-2 is ready now, but your profile was trained without it. Press <b>Retrain</b> to use it.</p>` : ""}
     <div id="insights"></div>
     <div class="grid2">
       <div><h3>What sets you apart</h3>${traits}</div>
