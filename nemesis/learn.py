@@ -79,7 +79,7 @@ def record_game(store: Store, player: str, player_color: chess.Color, moves: lis
                 result: str | None = None, start_fen: str = chess.STARTING_FEN,
                 risk: float | None = None, annotations: list[dict] | None = None,
                 tc: TimeControl | None = None, clocks: list[float] | None = None,
-                opponent: str = "Nemesis") -> str | None:
+                opponent: str = "Nemesis", hints: list[int] | None = None) -> str | None:
     """Store a game played against Nemesis so the next retrain learns from it.
 
     `result` is a PGN result ("1-0", "0-1", "1/2-1/2"). If it is None, it is taken from the board.
@@ -87,6 +87,7 @@ def record_game(store: Store, player: str, player_color: chess.Color, moves: lis
     (Decision.annotation per Nemesis move) are kept for the game review. `clocks` holds each
     mover's remaining seconds after each move, so training sees how you play under time pressure.
     `opponent` names the other side, e.g. a Doppelgänger (whose games are never rated).
+    `hints` are the plies where you asked for a hint: training leaves those moves out.
     """
     if not moves:
         return None
@@ -99,8 +100,8 @@ def record_game(store: Store, player: str, player_color: chess.Color, moves: lis
     for m in move_rows:
         m.game_id = row.id
     store.add_game(row, move_rows)
-    if annotations:
-        store.put_json("annotations", row.id, {"risk": risk, "moves": annotations})
+    if annotations or hints:
+        store.put_json("annotations", row.id, {"risk": risk, "moves": annotations or [], "hints": hints or []})
     if risk is not None and row.result is not None:
         ratings.update_after_game(store, row.id, player, risk, row.result, timecontrol.category(tc))
     return row.id

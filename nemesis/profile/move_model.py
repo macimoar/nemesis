@@ -151,13 +151,16 @@ def build_samples(
         if game.source == "nemesis":
             recency *= 1.5
         moves = store.moves(game.id)
-        own = {(position_key(chess.Board(m.fen)), m.uci) for m in moves[:24] if m.is_player}
+        hinted = store.hinted_plies(game)   # a hint's move was Stockfish's idea, not yours
+        own = {(position_key(chess.Board(m.fen)), m.uci) for m in moves[:24] if m.is_player and m.ply not in hinted}
         book = LeaveOneOut(tree, own)
         cached = store.get_samples(game.id, version, depth)
         if cached is not None:
             # A game's features never change, except the opening-book ones (your repertoire
             # grows with every game), which are cheap to refresh.
             for smp in unpack_samples(*cached, game_id=game.id):
+                if smp.ply in hinted:
+                    continue
                 smp.weight = recency
                 refresh_book(smp, book)
                 samples.append(smp)
@@ -202,7 +205,7 @@ def build_samples(
                 key=position_key(board),
             ))
         store.put_samples(game.id, version, depth, *pack_samples(game_samples))
-        samples.extend(game_samples)
+        samples.extend(s for s in game_samples if s.ply not in hinted)
         if progress:
             progress(gi + 1, n)
     return samples

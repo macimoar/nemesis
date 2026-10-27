@@ -304,6 +304,12 @@ class Store:
                 self.conn.execute("INSERT OR REPLACE INTO annotations VALUES (?,?)", (game_id, json.dumps(data)))
             self.conn.commit()
 
+    def hinted_plies(self, game: GameRow) -> set[int]:
+        """Plies of a game against Nemesis where you'd asked for a hint: not your own play."""
+        if game.source != "nemesis":
+            return set()
+        return set((self.get_json("annotations", game.id) or {}).get("hints", []))
+
     def get_json(self, table: str, game_id: str, min_depth: int = 0):
         assert table in ("annotations", "reviews")
         with self._lock:

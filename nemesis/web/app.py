@@ -35,6 +35,7 @@ from nemesis.timecontrol import TimeControl
 
 STATIC = Path(__file__).parent / "static"
 DRAW_OFFER_GAP = 3   # your moves between draw offers
+MAX_HINTS = 3        # per game; any hint makes the game unrated
 
 
 def _time_left(started: float, done: int, total: int) -> str:
@@ -108,6 +109,11 @@ class ExploreMoveReq(BaseModel):
     uci: str
 
 
+class AnalysisReq(BaseModel):
+    fen: str
+    uci: str | None = None
+
+
 class EloReq(BaseModel):
     elo: int | None = None
 
@@ -142,7 +148,9 @@ class Game:
     reason: str = ""                                 # how it ended, when not by the board
     last_draw_offer: int = -99                       # your move number when you last offered a draw
     doppel: Doppelganger | None = None               # set when playing a Doppelgänger, not Nemesis
+    hint: dict | None = None                         # the latest hint: {ply, from}
     evals: list = field(default_factory=list)        # Stockfish eval after each ply, White's view (cp)
+    hints: list = field(default_factory=list)        # plies where you asked for a hint
 
     @property
     def opponent(self) -> str:
@@ -244,6 +252,15 @@ def create_app(db: str | Path = DEFAULT_DB, depth: int = 10) -> FastAPI:
             return None
         return cp if g.board.turn == chess.WHITE else -cp
 
+    def history(g: Game) -> tuple[list[str], list[str]]:
+        """The position before each move and after the last (FENs), and the moves in SAN."""
+        replay, fens, sans = chess.Board(), [], []
+        for m in g.board.move_stack:
+            fens.append(replay.fen())
+            sans.append(replay.san(m))
+            replay.push(m)
+        return fens + [replay.fen()], sans
+
     def state(g: Game) -> dict:
         legal: dict[str, list[str]] = {}
         if not g.finished and g.board.turn == g.human:
@@ -261,6 +278,10 @@ def create_app(db: str | Path = DEFAULT_DB, depth: int = 10) -> FastAPI:
             "game_id": g.game_id, "reason": g.reason,
             "opponent": g.opponent, "doppel": g.doppel.name if g.doppel else None,
             "evals": g.evals, "opening": openings.name_of(g.board),
+            "moves": [m.uci() for m in g.board.move_stack],
+            **dict(zip(("fens", "sans"), history(g))),
+            "hints_left": MAX_HINTS - len(g.hints),
+            "hint": g.hint if g.hint and g.hint["ply"] == len(g.board.move_stack) else None,
             "draw_offer_in": max(0, DRAW_OFFER_GAP - (g.board.fullmove_number - g.last_draw_offer)),
             "clock": None if not g.tc else {
                 "white": g.time_left(chess.WHITE), "black": g.time_left(chess.BLACK),
@@ -295,9 +316,11 @@ def create_app(db: str | Path = DEFAULT_DB, depth: int = 10) -> FastAPI:
         g.finished, g.result = True, result
         # Rate against the tier Nemesis mostly played at (the risk can change mid-game).
         risks = [a["risk"] for a in g.annotations] or [g.engine.risk]
+        rated = not g.doppel and not g.hints
         g.game_id = record_game(store, g.player, g.human, [m.uci() for m in g.board.move_stack],
-                                result=result, risk=None if g.doppel else sum(risks) / len(risks),
-                                annotations=g.annotations, tc=g.tc, clocks=g.clocks, opponent=g.opponent)
+                                result=result, risk=sum(risks) / len(risks) if rated else None,
+                                annotations=g.annotations, tc=g.tc, clocks=g.clocks, opponent=g.opponent,
+                                hints=g.hints)
         if g.game_id is None:  # no moves were played: aborted, like on Chess.com
             g.result = "*"
             lines = [f"{g.reason + ' ' if g.reason else ''}No moves were played, so the game was aborted and isn't rated."]
@@ -308,7 +331,8 @@ def create_app(db: str | Path = DEFAULT_DB, depth: int = 10) -> FastAPI:
         jobs[job.id] = job
         lines = [f"Game over ({result}). {g.reason + ' ' if g.reason else ''}"
                  + ("Practice games aren't rated, but Nemesis still studies your moves." if g.doppel
-                    else "I'm studying this one.")]
+                    else "You used a hint, so this game isn't rated. I'm still studying your other moves."
+                    if g.hints else "I'm studying this one.")]
         change = store.rating_change(g.game_id)
         for entity, (before, after) in change.items():
             info = ratings.parse_entity(entity)
@@ -504,6 +528,33 @@ def create_app(db: str | Path = DEFAULT_DB, depth: int = 10) -> FastAPI:
         nemesis_turn(g)
         return state(g)
 
+    @app.post("/api/games/{game_id}/hint")
+    def hint(game_id: str) -> dict:
+        """Which piece to move: Stockfish's best move, half told. A few per game, and they cost
+        the game its rating; Nemesis doesn't learn your style from a move it helped with."""
+        g = get_game(game_id)
+        if g.finished or g.board.turn != g.human:
+            raise HTTPException(409, "not your turn")
+        ply = len(g.board.move_stack)
+        if g.hint and g.hint["ply"] == ply:      # asking again for the same move is free
+            return state(g)
+        if len(g.hints) >= MAX_HINTS:
+            raise HTTPException(409, f"No hints left: {MAX_HINTS} per game.")
+        lines = g.engine.analyzer.lines(g.board, multipv=1)
+        best = chess.Move.from_uci(max(lines, key=lines.get))
+        piece = g.board.piece_at(best.from_square)
+        square = chess.square_name(best.from_square)
+        first = not g.hints
+        g.hints.append(ply)
+        g.hint = {"ply": ply, "from": square}
+        left = MAX_HINTS - len(g.hints)
+        text = f"Look at your {chess.piece_name(piece.piece_type)} on {square}."
+        text += (" Hints make the game unrated, and I won't learn your style from a move I helped with."
+                 if first else "")
+        text += f" {left} hint{'s' if left != 1 else ''} left." if left else " That was your last hint."
+        g.log.append({"who": "nemesis", "kind": "info", "lines": [f"**Hint:** {text}"]})
+        return state(g)
+
     @app.post("/api/games/{game_id}/draw")
     def offer_draw(game_id: str) -> dict:
         """You offer a draw; Nemesis decides as itself, from its chances against you."""
@@ -696,6 +747,23 @@ def create_app(db: str | Path = DEFAULT_DB, depth: int = 10) -> FastAPI:
                 cp = -cp
         return {"steps": steps, "fen": board.fen(), "cp": cp, "legal": _legal(board) if board.turn == me else {},
                 "over": board.is_game_over()}
+
+    # -- Analysis board (untimed games): both sides, no engine ----------------
+    @app.post("/api/analysis")
+    def analysis(req: AnalysisReq) -> dict:
+        """Legal moves in a position, after `uci` if given. Deliberately no evaluation: it's a
+        board to think on, not an engine to ask."""
+        board = _board(req.fen)
+        step = None
+        if req.uci:
+            move = _move(board, req.uci)
+            step = {"uci": move.uci(), "san": board.san(move)}
+            board.push(move)
+            step["fen"] = board.fen()
+        over = board.is_game_over()
+        return {"step": step, "fen": board.fen(), "legal": _legal(board), "check": board.is_check(),
+                "turn": "white" if board.turn == chess.WHITE else "black",
+                "over": over, "result": board.result() if over else None}
 
     @app.get("/api/games/list/{player}")
     def list_games(player: str) -> list[dict]:

@@ -29,9 +29,10 @@ def insights(store: Store, player: str) -> dict:
         n = hits = 0
         prob_sum = 0.0
         g_traps = g_sprung = 0
+        hinted = set(ann.get("hints", []))
         for a in ann.get("moves", []):
-            if a["ply"] + 1 >= len(moves):
-                continue  # the game ended on Nemesis's move
+            if a["ply"] + 1 >= len(moves) or a["ply"] + 1 in hinted:
+                continue  # the game ended on Nemesis's move, or a hint chose your reply
             reply = moves[a["ply"] + 1].uci
             n += 1
             hits += a.get("top") == reply

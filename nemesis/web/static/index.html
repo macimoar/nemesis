@@ -43,6 +43,9 @@
         font-size: 9.5cqw; line-height: 1; min-width: 0; min-height: 0; overflow: hidden; }
   .sq.l { background: var(--light-sq); } .sq.d { background: var(--dark-sq); }
   .sq.last::before, .sq.sel::before { content: ""; position: absolute; inset: 0; background: var(--hl); }
+  .sq.hint::after { content: ""; position: absolute; inset: 0; box-shadow: inset 0 0 0 4px var(--good); animation: hintpulse 1.4s ease-in-out infinite; }
+  @keyframes hintpulse { 50% { box-shadow: inset 0 0 0 7px var(--good); } }
+  @media (prefers-reduced-motion: reduce) { .sq.hint::after { animation: none; } }
   .sq.pre::before { content: ""; position: absolute; inset: 0; background: var(--pre); }
   .sq.target::after { content: ""; position: absolute; width: 28%; height: 28%; border-radius: 50%; background: var(--dot); }
   .sq.incheck { box-shadow: inset 0 0 0 4px var(--accent); }
@@ -137,7 +140,7 @@
   a.btnlink:hover { border-color: var(--ink); }
   a.small { font-size: 13px; color: var(--muted); margin-right: 8px; }
   button.small { padding: 4px 10px; font-size: 13px; }
-  #explorebar button.on { border-color: var(--accent); color: var(--ink); background: var(--accent-soft); }
+  #explorebar button.on, #anabar button.on { border-color: var(--accent); color: var(--ink); background: var(--accent-soft); }
   .strip { display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: baseline; margin-top: 12px; font-size: 14px; }
   .strip b { font-variant-numeric: tabular-nums; }
   .strip .delta.up { color: var(--good); } .strip .delta.down { color: var(--accent); }
@@ -271,6 +274,14 @@
         <button id="sound" class="ghost" aria-pressed="true" title="Move sounds">🔊</button>
         <button id="reviewgame" class="hidden">Review this game</button>
       </div>
+      <div class="row hidden" id="gamenav">
+        <button class="ghost" id="hv-first" aria-label="Start of the game" title="Start (↑)">⏮</button>
+        <button class="ghost" id="hv-prev" aria-label="Previous move" title="Previous move (←)">◀</button>
+        <button class="ghost" id="hv-next" aria-label="Next move" title="Next move (→)">▶</button>
+        <button class="ghost" id="hv-last" aria-label="Back to the game" title="Now (↓)">⏭</button>
+        <button class="ghost" id="hint" title="Shows which piece to move. 3 per game, and any hint makes the game unrated.">Hint</button>
+        <button class="ghost hidden" id="analyse" title="Move both sides freely to think a line through. No engine.">Analysis board</button>
+      </div>
       <div id="status" class="status"></div>
       <div id="log" class="log"></div>
     </div>
@@ -286,6 +297,17 @@
       <div id="rv-now" class="now"></div>
       <svg id="graph" class="graph" preserveAspectRatio="none" role="img" aria-label="Evaluation graph"></svg>
       <div id="rv-moves" class="moves"></div>
+    </div>
+    <div id="anabar" class="hidden">
+      <div class="row">
+        <button class="ghost" id="an-first" aria-label="Starting position">⏮</button>
+        <button class="ghost" id="an-prev" aria-label="Previous move">◀</button>
+        <button class="ghost" id="an-next" aria-label="Next move">▶</button>
+        <button class="ghost" id="an-reset">Clear moves</button>
+        <button id="an-exit">Back to the game</button>
+      </div>
+      <div id="an-now" class="now" aria-live="polite"></div>
+      <p class="muted" style="margin:6px 0 0;font-size:13px">Move both sides to think a line through, and step back with ◀ ▶ (or the arrow keys). There's no engine here: the judging is yours, as over a real board.</p>
     </div>
     <div id="explorebar" class="hidden">
       <div class="row">
@@ -409,6 +431,9 @@ function applyPending(pieces, uci) {
 
 let pendingMove = null;   // your move, sent but not yet confirmed
 let premove = null;       // {from, to}: your next move, queued while Nemesis thinks
+let view = null;          // in a game: the ply on the board while looking back (null = now)
+let ana = null;           // analysis board: {start, steps, i (-1 = start), busy}; each node {fen, legal, turn, check, over, result}
+const viewing = () => !!(game && view !== null && !review && !puz && !explore && !ana);
 
 function render() {
   const el = $("board"); el.innerHTML = "";
@@ -418,17 +443,23 @@ function render() {
     lastUci = rply < 0 ? null : review.moves[rply].uci;
   } else if (puz) {
     fen = puz.shown; lastUci = puz.last;
+  } else if (ana) {
+    const step = anaStep();
+    fen = anaNode().fen; lastUci = step ? step.uci : null;
   } else if (explore) {
     const step = exploreStep();
     fen = step ? step.fen : explore.data.fen; lastUci = step ? step.uci : null;
+  } else if (viewing()) {
+    fen = game.fens[view]; lastUci = view ? game.moves[view - 1] : null;
   }
   const pieces = parseFen(fen);
-  if (pendingMove && !review) { applyPending(pieces, pendingMove); lastUci = pendingMove; }
+  if (pendingMove && !review && !ana && !viewing()) { applyPending(pieces, pendingMove); lastUci = pendingMove; }
   if (puz && puz.wrong) { applyPending(pieces, puz.wrong); lastUci = puz.wrong; }   // your wrong answer, briefly
   const targets = new Set(selected && !review ? movesFrom(selected).map(u => u.slice(2, 4)) : []);
   const last = lastUci ? [lastUci.slice(0, 2), lastUci.slice(2, 4)] : [];
-  const turn = puz ? puz.p.color : game ? game.turn : "white";
-  const inCheck = explore ? false : puz ? puz.p.check && !puz.result : game && game.check;
+  const turn = ana ? anaNode().turn : puz ? puz.p.color : game ? game.turn : "white";
+  const inCheck = ana ? anaNode().check : explore || viewing() ? false : puz ? puz.p.check && !puz.result : game && game.check;
+  const hintSq = game && game.hint && !review && !puz && !explore && !ana && !viewing() && !pendingMove ? game.hint.from : null;
   for (let r = 0; r < 8; r++) for (let f = 0; f < 8; f++) {
     const rank = flipped ? r + 1 : 8 - r, file = flipped ? 7 - f : f;
     const name = "abcdefgh"[file] + rank;
@@ -438,6 +469,7 @@ function render() {
     if (last.includes(name)) d.classList.add("last");
     if (name === selected) d.classList.add("sel");
     if (premove && (name === premove.from || name === premove.to)) d.classList.add("pre");
+    if (name === hintSq) d.classList.add("hint");
     if (targets.has(name)) d.classList.add("target");
     const p = pieces[name];
     if (p) {
@@ -459,11 +491,12 @@ function render() {
 // Moving: click a piece then a square, or drag it. Promotions ask which piece.
 // ---------------------------------------------------------------------------
 const canMove = () => !review && !pendingMove && !promoOpen &&
-  (explore ? !explore.busy : puz ? !puz.result && !puz.intro : game && !game.finished && game.turn === game.human);
+  (ana ? !ana.busy && !anaNode().over : explore ? !explore.busy : puz ? !puz.result && !puz.intro :
+   game && view === null && !game.finished && game.turn === game.human);
 // While Nemesis thinks you can queue your next move (a premove). It's checked when your turn comes.
-const premoving = () => !!(game && !review && !puz && !explore && !promoOpen && !game.finished &&
+const premoving = () => !!(game && !review && !puz && !explore && !ana && view === null && !promoOpen && !game.finished &&
   (pendingMove || game.turn !== game.human));
-const movesFrom = (sq) => premoving() ? premoveDests(sq) : (explore ? exploreLegal()[sq] : puz ? puz.result || puz.intro ? [] : puz.p.legal[sq] : game && game.legal[sq]) || [];
+const movesFrom = (sq) => premoving() ? premoveDests(sq) : (ana ? anaNode().legal[sq] : explore ? exploreLegal()[sq] : puz ? puz.result || puz.intro ? [] : puz.p.legal[sq] : game && game.legal[sq]) || [];
 const movesTo = (from, to) => movesFrom(from).filter(u => u.slice(2, 4) === to);
 let drag = null, promoOpen = false;
 
@@ -522,6 +555,7 @@ function tryMove(from, to) {
 
 async function submitMove(uci) {
   sfx(moveSound(uci));
+  if (ana) return anaMove(uci);
   if (explore) return exploreMove(uci);
   if (puz) return answerPuzzle(uci);
   pendingMove = uci;
@@ -541,7 +575,7 @@ async function submitMove(uci) {
 
 function showPromotion(from, to) {
   promoOpen = true;
-  const white = (explore ? explore.data.you : puz ? puz.p.color : game.human) === "white";
+  const white = (ana ? anaNode().turn : explore ? explore.data.you : puz ? puz.p.color : game.human) === "white";
   const sqEl = document.querySelector(`#board [data-sq="${to}"]`);
   const board = $("board"), b = board.getBoundingClientRect(), r = sqEl.getBoundingClientRect();
   const atTop = r.top - b.top < b.height / 2;   // open downward from the top edge, upward from the bottom
@@ -584,6 +618,7 @@ function squareAt(x, y) {
 
 $("board").addEventListener("pointerdown", (e) => {
   if (e.button === 0 && clearMarks()) render();   // a left click wipes your arrows, as on Lichess
+  if (e.button === 0 && viewing()) { setView(null); return; }   // looking back: a click returns to now
   const sqEl = e.target.closest(".sq");
   if (!sqEl || !(canMove() || premoving()) || e.button > 0) return;
   const name = sqEl.dataset.sq;
@@ -651,7 +686,14 @@ function update() {
     log.appendChild(d);
   }
   $("resign").disabled = game.finished;
-  $("status").textContent = game.finished ? (game.result === "*" ? game.reason : `Game over: ${game.result}${game.reason ? ". " + game.reason : ""}`) : (game.turn === game.human ? "Your move." : `${oppName()} is thinking…`);
+  setStatus();
+  $("gamenav").classList.remove("hidden");
+  const yourTurn = !game.finished && game.turn === game.human && !pendingMove;
+  $("hint").textContent = game.finished ? "Hint" : `Hint (${game.hints_left} left)`;
+  $("hint").disabled = !yourTurn || (!game.hints_left && !game.hint);
+  $("analyse").classList.toggle("hidden", !!game.clock && !game.finished);   // untimed games, or once it's over
+  $("analyse").disabled = !(game.finished || yourTurn);
+  navButtons();
   $("commentary").value = game.commentary;
   $("reviewgame").classList.toggle("hidden", !(game.finished && game.game_id));
   if (game.doppel) $("strip").innerHTML = `<span>Practice game vs <b>${escapeHtml(game.opponent)}</b></span><span class="muted">not rated</span>`;
@@ -661,6 +703,127 @@ function update() {
   if (premove && !premoving()) playPremove();
   if (game.finished) setTimeout(() => loadProfile($("player").value), 4000);
 }
+
+function setStatus() {
+  if (viewing()) {
+    const label = view ? `${Math.ceil(view / 2)}${view % 2 ? "." : "..."} ${game.sans[view - 1]}` : "the start";
+    $("status").textContent = `Looking back: after ${label}. Press → or ⏭, or click the board, to return.`;
+    return;
+  }
+  $("status").textContent = game.finished ? (game.result === "*" ? game.reason : `Game over: ${game.result}${game.reason ? ". " + game.reason : ""}`) : (game.turn === game.human ? "Your move." : `${oppName()} is thinking…`);
+}
+
+// ---------------------------------------------------------------------------
+// Looking back through the game: ◀ ▶ or the arrow keys. The game goes on meanwhile.
+// ---------------------------------------------------------------------------
+function setView(ply) {
+  if (!game) return;
+  const n = game.moves.length;
+  view = ply === null || ply >= n ? null : Math.max(0, ply);
+  selected = null;
+  render(); renderEval(); setStatus(); navButtons();
+}
+function navButtons() {
+  const n = game.moves.length, at = view ?? n;
+  $("hv-first").disabled = $("hv-prev").disabled = at === 0;
+  $("hv-next").disabled = $("hv-last").disabled = view === null;
+}
+$("hv-first").onclick = () => setView(0);
+$("hv-prev").onclick = () => setView((view ?? game.moves.length) - 1);
+$("hv-next").onclick = () => view !== null && setView(view + 1);
+$("hv-last").onclick = () => setView(null);
+document.addEventListener("keydown", (e) => {
+  if (["INPUT", "SELECT", "TEXTAREA"].includes(document.activeElement.tagName) || e.altKey || e.ctrlKey || e.metaKey) return;
+  const key = { ArrowLeft: -1, ArrowRight: 1, ArrowUp: "first", Home: "first", ArrowDown: "last", End: "last" }[e.key];
+  if (key === undefined || promoOpen) return;
+  if (ana) {
+    anaGo(key === "first" ? -1 : key === "last" ? ana.steps.length - 1 : ana.i + key);
+  } else if (game && !review && !puz && !explore) {
+    if (key === "first") setView(0);
+    else if (key === "last") setView(null);
+    else if (key === -1) setView((view ?? game.moves.length) - 1);
+    else if (view !== null) setView(view + 1);
+  } else return;
+  e.preventDefault();
+});
+
+// ---------------------------------------------------------------------------
+// Hints: which piece to move, never where. 3 per game; the game is then unrated, and
+// Nemesis doesn't learn your style from a move it helped with.
+// ---------------------------------------------------------------------------
+$("hint").onclick = async () => {
+  if (!game || game.finished) return;
+  setView(null);
+  try { game = await api(`/api/games/${game.id}/hint`, {}); update(); }
+  catch (e) { $("status").textContent = e.message; }
+};
+
+// ---------------------------------------------------------------------------
+// Analysis board: both sides, from the position on screen. No engine, on purpose: in an
+// untimed game it's a board to think on, like a real one, not a way to find the answer.
+// ---------------------------------------------------------------------------
+const anaStep = () => ana && ana.i >= 0 ? ana.steps[ana.i] : null;
+const anaNode = () => anaStep() || ana.start;
+
+async function openAnalysis() {
+  const fen = game.fens[view ?? game.moves.length];
+  if (explore) exitExplore();
+  view = null; selected = null; premove = null;
+  ana = { start: { fen, legal: {}, turn: fen.split(" ")[1] === "w" ? "white" : "black" }, steps: [], i: -1, busy: true };
+  $("playbar").classList.add("hidden"); $("anabar").classList.remove("hidden");
+  ["opening", "evalbar", "evalgraph", "clock-top", "clock-bottom"].forEach(id => $(id).classList.add("hidden"));
+  $("an-now").innerHTML = "";
+  render();
+  try { ana.start = await api("/api/analysis", { fen }); }
+  catch (e) { $("an-now").textContent = e.message; return; }
+  ana.busy = false;
+  anaGo(-1);
+}
+
+async function anaMove(uci) {
+  const from = anaNode();
+  ana.busy = true;
+  try {
+    const res = await api("/api/analysis", { fen: from.fen, uci });
+    ana.steps = ana.steps.slice(0, ana.i + 1).concat([{ ...res, uci: res.step.uci, san: res.step.san }]);
+    ana.i = ana.steps.length - 1;
+  } catch (e) { $("an-now").textContent = e.message; }
+  ana.busy = false;
+  anaGo(ana.i);
+}
+
+function anaGo(i) {
+  if (!ana) return;
+  ana.i = Math.max(-1, Math.min(ana.steps.length - 1, i));
+  selected = null;
+  render();
+  const [, side, , , , full] = ana.start.fen.split(" ");
+  const first = (+full - 1) * 2 + (side === "b" ? 1 : 0);   // the ply the line starts from
+  const moves = ana.steps.map((s, k) => {
+    const ply = first + k, num = Math.floor(ply / 2) + 1;
+    const label = ply % 2 === 0 ? `${num}. ${s.san}` : k === 0 ? `${num}... ${s.san}` : s.san;
+    return `<button class="ghost small an-step${k === ana.i ? " on" : ""}" data-k="${k}">${escapeHtml(label)}</button>`;
+  }).join(" ");
+  const node = anaNode();
+  const head = node.over ? `<b>${node.result === "1/2-1/2" ? "Draw." : "Checkmate."}</b>` :
+    `<b>${node.turn === "white" ? "White" : "Black"} to move.</b>`;
+  $("an-now").innerHTML = `${head}${moves ? `<div style="margin-top:6px;display:flex;flex-wrap:wrap;gap:4px">${moves}</div>` : ""}`;
+  document.querySelectorAll("#an-now .an-step").forEach(b => b.onclick = () => anaGo(+b.dataset.k));
+  $("an-first").disabled = $("an-prev").disabled = ana.i < 0;
+  $("an-next").disabled = ana.i >= ana.steps.length - 1;
+}
+
+function exitAnalysis() {
+  ana = null; selected = null;
+  $("anabar").classList.add("hidden"); $("playbar").classList.remove("hidden");
+  if (game) update(); else render();
+}
+$("analyse").onclick = () => game && openAnalysis();
+$("an-first").onclick = () => anaGo(-1);
+$("an-prev").onclick = () => ana && anaGo(ana.i - 1);
+$("an-next").onclick = () => ana && anaGo(ana.i + 1);
+$("an-reset").onclick = () => { if (ana) { ana.steps = []; anaGo(-1); } };
+$("an-exit").onclick = exitAnalysis;
 
 // X-Ray lines look like "**Label:** text"; Poker Face lines are plain one-liners.
 function speech(lines) {
@@ -892,8 +1055,9 @@ $("newgame").onclick = async () => {
   if (review) exitReview();
   if (puz) exitPuzzles(false);
   if (explore) exitExplore();
+  if (ana) exitAnalysis();
   flipped = $("color").value === "black";
-  selected = null; premove = null;
+  selected = null; premove = null; view = null;
   $("status").textContent = "Starting…";
   try { game = await api("/api/games", { player, color: $("color").value, risk: $("risk").value / 100, commentary: $("commentary").value, elo: +$("strength").value || null, tc: $("tc").value || null, opponent: $("opponent").value || null }); update(); }
   catch (e) { $("status").textContent = e.message; }
@@ -974,6 +1138,7 @@ async function openReview(id) {
 function enterReview(data) {
   if (puz) exitPuzzles(false);
   if (explore) exitExplore();
+  if (ana) exitAnalysis();
   review = data;
   ["opening", "evalbar", "evalgraph"].forEach(id => $(id).classList.add("hidden")); rply = -1; selected = null;
   flipped = data.game.you === "black";
@@ -1132,6 +1297,7 @@ async function nextDrill(kind, skip, opening) {
   const puzzle = data[DRILLS[kind].key];
   if (!puzzle) return puz ? exitPuzzles() : DRILLS[kind].load();   // nothing left: back to the list
   if (review) exitReview();
+  if (ana) exitAnalysis();
   clearTimeout(pzTimer);
   puz = { kind, opening, p: puzzle, result: null, shown: puzzle.fen, last: null, misses: [], notes: [], tryNote: "" };
   pzHints = 0; selected = null; flipped = puzzle.color === "black";
@@ -1330,6 +1496,7 @@ function exploreLegal() {
 async function openExplore(drill) {
   if (review) exitReview();
   if (puz) exitPuzzles(false);
+  if (ana) exitAnalysis();
   $("ex-now").innerHTML = `<span class="muted">Working out the lines…</span>`;
   $("playbar").classList.add("hidden"); $("explorebar").classList.remove("hidden");
   ["opening", "evalbar", "evalgraph"].forEach(id => $(id).classList.add("hidden"));
@@ -1439,14 +1606,15 @@ function shiftTag(entry) {
 }
 
 function renderEval() {
-  const live = game && !review && !puz && !explore;
+  const live = game && !review && !puz && !explore && !ana;
   const op = live && game.opening;
   $("opening").classList.toggle("hidden", !live);
   $("opening").innerHTML = op ? `<b>${escapeHtml(op.eco)}</b> · ${escapeHtml(op.name)}` : (live && game.log.length ? "" : "");
   const show = live && xray() && game.evals && game.evals.length > 0;
   $("evalbar").classList.toggle("hidden", !(live && xray()));
   $("evalgraph").classList.toggle("hidden", !show);
-  const cp = game && game.evals && game.evals.length ? game.evals[game.evals.length - 1] ?? 20 : 20;
+  const at = game && game.evals ? (view !== null ? view : game.evals.length) : 0;   // the eval of the position shown
+  const cp = at ? game.evals[at - 1] ?? 20 : 20;
   const bar = $("evalbar");
   bar.classList.toggle("flip", flipped);
   bar.classList.toggle("ahead-black", cp < 0);
@@ -1569,7 +1737,9 @@ window.addEventListener("pointerup", (e) => {
 function currentFen() {   // the position on screen, whichever mode the board is in
   if (review) return rply < 0 ? review.game.start_fen : review.moves[rply].fen_after;
   if (puz) return puz.shown;
+  if (ana) return anaNode().fen;
   if (explore) return exploreStep() ? exploreStep().fen : explore.data.fen;
+  if (viewing()) return game.fens[view];
   return game ? game.fen : "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w";
 }
 
@@ -1682,7 +1852,7 @@ function sfx(kind) {
 
 // Your own move: tell capture/castle from the board before it changes.
 function moveSound(uci) {
-  const shownFen = explore ? (exploreStep() ? exploreStep().fen : explore.data.fen) : puz ? puz.shown : game.fen;
+  const shownFen = ana ? anaNode().fen : explore ? (exploreStep() ? exploreStep().fen : explore.data.fen) : puz ? puz.shown : game.fen;
   const pieces = parseFen(shownFen), from = uci.slice(0, 2), to = uci.slice(2, 4), p = pieces[from] || "";
   if (pieces[to] || (p.toLowerCase() === "p" && from[0] !== to[0])) return "capture";
   if (p.toLowerCase() === "k" && Math.abs(from.charCodeAt(0) - to.charCodeAt(0)) === 2) return "castle";

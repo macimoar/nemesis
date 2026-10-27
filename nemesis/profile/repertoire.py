@@ -52,6 +52,6 @@ class OpeningTree:
     def from_store(cls, store: Store, player: str) -> "OpeningTree":
         tree = cls()
         for game in store.games(player):
-            moves = store.moves(game.id)
-            tree.add_game([(m.fen, m.uci, bool(m.is_player)) for m in moves], game.result)
+            moves, hinted = store.moves(game.id), store.hinted_plies(game)
+            tree.add_game([(m.fen, m.uci, bool(m.is_player) and m.ply not in hinted) for m in moves], game.result)
         return tree
