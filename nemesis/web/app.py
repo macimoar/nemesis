@@ -15,8 +15,8 @@ from pathlib import Path
 import chess
 import chess.pgn
 import httpx
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse, Response
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 from pydantic import BaseModel
 
 from nemesis.analysis.install import ensure_stockfish
@@ -32,6 +32,7 @@ from nemesis.learn import build_pgn, record_game, train
 from nemesis.review import cached_review, rating_changes, review_game
 from nemesis.store import DEFAULT_DB, Store
 from nemesis.timecontrol import TimeControl
+from nemesis.web import sharing as share
 
 STATIC = Path(__file__).parent / "static"
 DRAW_OFFER_GAP = 3   # your moves between draw offers
@@ -112,6 +113,11 @@ class ExploreMoveReq(BaseModel):
 class AnalysisReq(BaseModel):
     fen: str
     uci: str | None = None
+
+
+class ShareReq(BaseModel):
+    on: bool = False
+    new_pin: bool = False
 
 
 class EloReq(BaseModel):
@@ -205,6 +211,42 @@ def create_app(db: str | Path = DEFAULT_DB, depth: int = 10) -> FastAPI:
             holder["a"].close()
 
     app = FastAPI(title="Nemesis", lifespan=lifespan)
+    # Play from another device on the Wi-Fi: off until turned on here; other devices need the PIN.
+    app.state.sharing = sharing = share.Sharing(Path(db).parent / "settings.json", app)
+
+    @app.middleware("http")
+    async def only_this_computer_or_pin(request: Request, call_next):
+        if share.is_local(request.client.host if request.client else None) or request.url.path == "/pin":
+            return await call_next(request)
+        if sharing.allowed(request.cookies.get(share.COOKIE)):
+            if request.url.path.startswith("/api/share"):
+                return JSONResponse({"detail": "Only the computer running Nemesis can change this."}, 403)
+            return await call_next(request)
+        if request.url.path.startswith("/api/"):
+            return JSONResponse({"detail": "Enter the PIN first."}, 401)
+        return HTMLResponse(share.PIN_PAGE.replace("{error}", ""), 401)
+
+    @app.post("/pin")
+    async def enter_pin(request: Request):
+        from urllib.parse import parse_qs
+        pin = parse_qs((await request.body()).decode(errors="replace")).get("pin", [""])[0]
+        client = request.client.host if request.client else "?"
+        ok, why = sharing.try_pin(client, pin)
+        if not ok:
+            return HTMLResponse(share.PIN_PAGE.replace("{error}", why), 401)
+        resp = RedirectResponse("/", 303)
+        resp.set_cookie(share.COOKIE, sharing.pin, max_age=365 * 24 * 3600, httponly=True, samesite="lax")
+        return resp
+
+    @app.get("/api/share")
+    def share_status() -> dict:
+        return sharing.status()
+
+    @app.post("/api/share")
+    def share_set(req: ShareReq) -> dict:
+        if req.new_pin:
+            return sharing.new_pin()
+        return sharing.start() if req.on else sharing.stop()
     jobs: dict[str, Job] = {}
     games: dict[str, Game] = {}
 

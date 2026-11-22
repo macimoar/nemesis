@@ -67,17 +67,22 @@ def serve(db: str | None = None, host: str = "127.0.0.1", port: int | None = Non
         port = free_port(host)
     url = f"http://{host}:{port}"
 
-    server = uvicorn.Server(uvicorn.Config(create_app(db or DEFAULT_DB), host=host, port=port,
-                                           log_level="warning"))
+    app = create_app(db or DEFAULT_DB)
+    server = uvicorn.Server(uvicorn.Config(app, host=host, port=port, log_level="warning"))
     thread = threading.Thread(target=server.run, daemon=True)
     thread.start()
     while not server.started and thread.is_alive():
         time.sleep(0.05)
     if not thread.is_alive():
         raise RuntimeError("the Nemesis server couldn't start")
+    sharing = app.state.sharing
+    if host == "127.0.0.1":   # an explicit --host already decides who can connect
+        sharing.started(port)
     if banner:
         print("=" * 60)
         print(f"  Nemesis is running at {url}")
+        if sharing.on:
+            print(f"  Other devices on your Wi-Fi: {sharing.status()['url']}  (PIN {sharing.pin})")
         print("  Keep this window open while you play. Close it to quit.")
         print("=" * 60, flush=True)
     if open_browser:

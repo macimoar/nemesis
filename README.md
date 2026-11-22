@@ -33,6 +33,12 @@ In every mode, the **opening is named as you play it** (from the Lichess opening
 
 Everything stays on your computer, in a `.nemesis` folder in your home folder. Stockfish is included, so there's nothing else to install.
 
+### Play on your iPad (or phone)
+
+Nemesis runs on your computer, but you can play from any device on the same Wi-Fi. Click **📱 Play on another device** at the top of the page, then **Turn on**. It shows an address and a PIN: open the address in the iPad's Safari and enter the PIN once. Your games and Stockfish stay on the computer, so keep Nemesis running there while you play. On a touch screen, press and hold a square to draw an arrow (let go without moving for a circle).
+
+Sharing is off until you turn it on, it's remembered next time, and other devices can't get in without the PIN. If Windows or macOS asks whether Nemesis may accept network connections, allow it on private networks. **New PIN** locks every other device out until they enter the new one.
+
 ## How it works
 
 1. **Opponent model.** A per-player conditional-logit model predicts P(move | position, you). Each legal move is described by about 30 features:
