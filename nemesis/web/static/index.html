@@ -83,7 +83,7 @@
                   font-size: 9.5cqw; line-height: 1; cursor: pointer; }
   .promo button:hover, .promo button:focus-visible { background: var(--accent-soft); outline: none; }
   /* Out of the layout flow, so a font's glyph metrics (they differ by OS) can't stretch a row. */
-  .pc { position: absolute; inset: 0; z-index: 1; display: flex; align-items: center; justify-content: center; line-height: 1; }
+  .pc { font-variant-emoji: text; position: absolute; inset: 0; z-index: 1; display: flex; align-items: center; justify-content: center; line-height: 1; }
   .pc.w { color: #fff; text-shadow: 0 0 2px #000, 0 0 1px #000, 0 1px 0 #000; }
   .pc.b { color: #111; text-shadow: 0 0 1px rgba(255,255,255,.6); }
   .coord { position: absolute; z-index: 2; font-size: 11px; font-weight: 600; font-family: ui-sans-serif, system-ui, sans-serif; }
@@ -285,10 +285,10 @@
         <button id="reviewgame" class="hidden">Review this game</button>
       </div>
       <div class="row hidden" id="gamenav">
-        <button class="ghost" id="hv-first" aria-label="Start of the game" title="Start (↑)">⏮</button>
-        <button class="ghost" id="hv-prev" aria-label="Previous move" title="Previous move (←)">◀</button>
-        <button class="ghost" id="hv-next" aria-label="Next move" title="Next move (→)">▶</button>
-        <button class="ghost" id="hv-last" aria-label="Back to the game" title="Now (↓)">⏭</button>
+        <button class="ghost" id="hv-first" aria-label="Start of the game" title="Start (↑)">⏮&#xFE0E;</button>
+        <button class="ghost" id="hv-prev" aria-label="Previous move" title="Previous move (←)">◀&#xFE0E;</button>
+        <button class="ghost" id="hv-next" aria-label="Next move" title="Next move (→)">▶&#xFE0E;</button>
+        <button class="ghost" id="hv-last" aria-label="Back to the game" title="Now (↓)">⏭&#xFE0E;</button>
         <button class="ghost" id="hint" title="Shows which piece to move. 3 per game, and any hint makes the game unrated.">Hint</button>
         <button class="ghost hidden" id="analyse" title="Move both sides freely to think a line through. No engine.">Analysis board</button>
       </div>
@@ -297,10 +297,10 @@
     </div>
     <div id="reviewbar" class="hidden">
       <div class="row">
-        <button class="ghost" id="rv-first" aria-label="First move">⏮</button>
-        <button class="ghost" id="rv-prev" aria-label="Previous move">◀</button>
-        <button class="ghost" id="rv-next" aria-label="Next move">▶</button>
-        <button class="ghost" id="rv-last" aria-label="Last move">⏭</button>
+        <button class="ghost" id="rv-first" aria-label="First move">⏮&#xFE0E;</button>
+        <button class="ghost" id="rv-prev" aria-label="Previous move">◀&#xFE0E;</button>
+        <button class="ghost" id="rv-next" aria-label="Next move">▶&#xFE0E;</button>
+        <button class="ghost" id="rv-last" aria-label="Last move">⏭&#xFE0E;</button>
         <button class="ghost" id="rv-flip">Flip</button>
         <button id="rv-exit">Back to play</button>
       </div>
@@ -310,9 +310,9 @@
     </div>
     <div id="anabar" class="hidden">
       <div class="row">
-        <button class="ghost" id="an-first" aria-label="Starting position">⏮</button>
-        <button class="ghost" id="an-prev" aria-label="Previous move">◀</button>
-        <button class="ghost" id="an-next" aria-label="Next move">▶</button>
+        <button class="ghost" id="an-first" aria-label="Starting position">⏮&#xFE0E;</button>
+        <button class="ghost" id="an-prev" aria-label="Previous move">◀&#xFE0E;</button>
+        <button class="ghost" id="an-next" aria-label="Next move">▶&#xFE0E;</button>
         <button class="ghost" id="an-reset">Clear moves</button>
         <button id="an-exit">Back to the game</button>
       </div>
@@ -323,8 +323,8 @@
       <div class="row">
         <button class="ghost" id="ex-played">Your move</button>
         <button class="ghost" id="ex-best">Better move</button>
-        <button class="ghost" id="ex-prev" aria-label="Previous move">◀</button>
-        <button class="ghost" id="ex-next" aria-label="Next move">▶</button>
+        <button class="ghost" id="ex-prev" aria-label="Previous move">◀&#xFE0E;</button>
+        <button class="ghost" id="ex-next" aria-label="Next move">▶&#xFE0E;</button>
         <button id="ex-exit">Back to the game</button>
       </div>
       <div id="ex-now" class="now" aria-live="polite"></div>
@@ -398,7 +398,8 @@
 </main>
 
 <script>
-const GLYPH = { k: "♚", q: "♛", r: "♜", b: "♝", n: "♞", p: "♟" };
+// U+FE0E asks for the text form: iOS otherwise draws the pawn (♟) as an emoji, always black.
+const GLYPH = Object.fromEntries(Object.entries({ k: "♚", q: "♛", r: "♜", b: "♝", n: "♞", p: "♟" }).map(([k, g]) => [k, g + "\uFE0E"]));
 const $ = (id) => document.getElementById(id);
 let game = null, selected = null, flipped = false;
 let review = null, rply = -1;   // review mode: the reviewed game and the ply shown (-1 = start)
